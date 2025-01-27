@@ -1,4 +1,5 @@
 .libs
+.vscode
 autom4te.cache
 build
 modules
