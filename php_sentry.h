@@ -8,6 +8,7 @@ extern zend_module_entry sentry_module_entry;
 #define PHP_SENTRY_EXTNAME "sentry"
 
 PHP_FUNCTION(sentry);
+PHP_FUNCTION(Sentry_trace);
 
 # if defined(ZTS) && defined(COMPILE_DL_TEST)
 ZEND_TSRMLS_CACHE_EXTERN()
