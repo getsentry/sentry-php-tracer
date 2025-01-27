@@ -1,5 +1,7 @@
 # sentry-php-tracer
 
+This is work in progress.
+
 ## Build the extension
 
 ```
@@ -13,6 +15,12 @@ To verify the extension is loaded, run
 
 ```
 php -m | grep -i sentry
+```
+
+## Generate _arginfo.h
+
+```
+make <file-name>_arginfo.h
 ```
 
 ## Contributing
