@@ -4,6 +4,7 @@
 
 #include "php.h"
 #include "php_sentry.h"
+#include "zend_observer.h"
 
 PHP_FUNCTION(sentry)
 {
@@ -20,15 +21,25 @@ static const zend_function_entry sentry_functions[] = {
     PHP_FE_END
 };
 
+PHP_MINIT_FUNCTION(sentry) {
+#if defined(ZTS) && defined(COMPILE_DL_SENTRY)
+    ZEND_TSRMLS_CACHE_UPDATE();
+#endif
+
+    /* zend_observer_fcall_register(); */
+
+    return SUCCESS;
+}
+
 zend_module_entry sentry_module_entry = {
     STANDARD_MODULE_HEADER,
     PHP_SENTRY_EXTNAME,
     sentry_functions,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
+    PHP_MINIT(sentry),          /* PHP_MINIT - Module initialization */
+    NULL,                       /* PHP_MSHUTDOWN - Module shutdown */
+    NULL,                       /* PHP_RINIT - Request initialization */
+    NULL,                       /* PHP_RSHUTDOWN - Request shutdown */
+    NULL,                       /* PHP_MINFO - Module info */
     PHP_SENTRY_VERSION,
     STANDARD_MODULE_PROPERTIES
 };
