@@ -5,7 +5,11 @@
 #include "Zend/zend_observer.h"
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_attributes.h"
-#include "Zend/zend_hrtime.h"
+#if PHP_VERSION_ID < 80300
+#include "ext/standard/hrtime.h"
+#define zend_hrtime_t php_hrtime_t
+#define zend_hrtime php_hrtime_current
+#endif
 #include <stdint.h>
 
 #include "sentry_arginfo.h"
