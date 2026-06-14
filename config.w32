@@ -1,0 +1,6 @@
+ARG_ENABLE("sentry", "whether to enable Sentry support",
+    "Enable Sentry support");
+if (PHP_SENTRY == "yes") {
+    AC_DEFINE("HAVE_SENTRY", 1, "Whether you have Sentry");
+    EXTENSION("Sentry", "sentry.c", true);
+}

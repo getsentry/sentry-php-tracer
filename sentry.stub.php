@@ -1,18 +1,22 @@
 <?php
 
 /**
- * @generate-class-entries 
  * @generate-function-entries
  */
 
 namespace Sentry {
-    function trace(
-        string|null $class,
-        string $function,
-        \Closure $closure
+    function instrument(
+        ?string $class_name,
+        string $function_name,
+        array $extra_metadata = []
     ): bool {}
-}
 
-namespace {
-    function sentry(): void {}
+    function setEndCallback(callable $callback): bool {}
+
+    function setStartCallback(callable $callback): bool {}
+
+    #[\Attribute(\Attribute::TARGET_FUNCTION | \Attribute::TARGET_METHOD)]
+    final class Trace {
+        public function __construct(array $metadata = []) {}
+    }
 }
