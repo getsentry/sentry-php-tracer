@@ -5,6 +5,7 @@
 #include "Zend/zend_observer.h"
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_attributes.h"
+#include "Zend/zend_hrtime.h"
 #include <stdint.h>
 
 #include "sentry_arginfo.h"
