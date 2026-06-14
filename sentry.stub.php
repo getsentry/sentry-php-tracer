@@ -2,6 +2,7 @@
 
 /**
  * @generate-function-entries
+ * @generate-legacy-arginfo 80000
  */
 
 namespace Sentry {

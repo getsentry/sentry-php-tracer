@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 0aec23779b930567dc122353b56e89b7bfb87520 */
+ * Stub hash: 421599558cb4157fb6c73190d9be80ca63fa0bad */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Sentry_instrument, 0, 2, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, class_name, IS_STRING, 1)
@@ -23,9 +23,21 @@ ZEND_FUNCTION(Sentry_setStartCallback);
 ZEND_METHOD(Sentry_Trace, __construct);
 
 static const zend_function_entry ext_functions[] = {
+#if (PHP_VERSION_ID >= 80400)
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("Sentry", "instrument"), zif_Sentry_instrument, arginfo_Sentry_instrument, 0, NULL, NULL)
+#else
+	ZEND_RAW_FENTRY(ZEND_NS_NAME("Sentry", "instrument"), zif_Sentry_instrument, arginfo_Sentry_instrument, 0)
+#endif
+#if (PHP_VERSION_ID >= 80400)
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("Sentry", "setEndCallback"), zif_Sentry_setEndCallback, arginfo_Sentry_setEndCallback, 0, NULL, NULL)
+#else
+	ZEND_RAW_FENTRY(ZEND_NS_NAME("Sentry", "setEndCallback"), zif_Sentry_setEndCallback, arginfo_Sentry_setEndCallback, 0)
+#endif
+#if (PHP_VERSION_ID >= 80400)
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("Sentry", "setStartCallback"), zif_Sentry_setStartCallback, arginfo_Sentry_setStartCallback, 0, NULL, NULL)
+#else
+	ZEND_RAW_FENTRY(ZEND_NS_NAME("Sentry", "setStartCallback"), zif_Sentry_setStartCallback, arginfo_Sentry_setStartCallback, 0)
+#endif
 	ZEND_FE_END
 };
 
