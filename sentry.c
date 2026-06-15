@@ -303,6 +303,7 @@ ZEND_FUNCTION(Sentry_instrument) {
             if (func != NULL && func->common.scope != NULL) {
                 class_name = func->common.scope->name;
             }
+            zend_string_release(lc_func);
         }
     }
 
