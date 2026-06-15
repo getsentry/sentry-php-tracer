@@ -1,5 +1,8 @@
 # sentry-php-tracer
 
+> [!CAUTION]
+> Work in progress. Expect API changes while not 1.0
+
 Sentry extension to enable automatic instrumentation of methods and functions.
 
 Methods/functions can be instrumented by either declaring the #[\Sentry\Trace] attribute on them
@@ -52,8 +55,6 @@ Attribute:
 
 Function:
 `\Sentry\instrument("MyClass", "myFunction", ['my-attribute' => 'test', 'other' => 'foo']`
-
-This is work in progress.
 
 ## Build the extension
 
