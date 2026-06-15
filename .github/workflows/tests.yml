@@ -31,6 +31,28 @@ jobs:
       - name: Test
         run: make test TESTS="--show-diff" NO_INTERACTION=1
 
+  valgrind:
+    name: Valgrind (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+
+      - name: Install valgrind
+        run: sudo apt-get install -y valgrind
+
+      - name: Build
+        run: |
+          phpize
+          ./configure --enable-sentry
+          make
+
+      - name: Test under valgrind
+        run: make test TESTS="--show-diff -m" NO_INTERACTION=1
+
   windows:
     name: PHP ${{ matrix.php-version }} (${{ matrix.arch }}, ${{ matrix.ts == '' && 'nts' || 'ts' }}) (Windows)
     needs: get-windows-matrix
