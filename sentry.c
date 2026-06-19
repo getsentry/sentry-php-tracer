@@ -123,11 +123,8 @@ static bool sentry_has_trace_attribute(zend_execute_data *execute_data) {
 }
 
 static void sentry_clear_pending_exception(void) {
-    zend_object *ex = EG(exception);
-
-    if (ex != NULL) {
-        EG(exception) = NULL;
-        OBJ_RELEASE(ex);
+    if (EG(exception) != NULL || EG(prev_exception) != NULL) {
+        zend_clear_exception();
     }
 }
 
