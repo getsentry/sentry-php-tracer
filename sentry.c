@@ -52,6 +52,24 @@ ZEND_TSRMLS_CACHE_DEFINE();
  */
 static zend_string *sentry_trace_attribute_lcname;
 
+static bool sentry_array_is_list(const zend_array *array) {
+#if PHP_VERSION_ID >= 80100
+    return zend_array_is_list(array);
+#else
+    zend_ulong expected_key = 0;
+    zend_ulong num_key;
+    zend_string *str_key;
+
+    ZEND_HASH_FOREACH_KEY(array, num_key, str_key) {
+        if (str_key != NULL || num_key != expected_key++) {
+            return false;
+        }
+    } ZEND_HASH_FOREACH_END();
+
+    return true;
+#endif
+}
+
 
 // ==== CALL STATE BEGIN ====
 
@@ -126,7 +144,7 @@ static bool sentry_is_attribute_arg(zend_string *name, zval *value) {
  * Integer keys are ignored and will not be copied.
  */
 static void sentry_merge_array(zval *dest, zval *source) {
-    if (zend_array_is_list(Z_ARRVAL_P(source))) {
+    if (sentry_array_is_list(Z_ARRVAL_P(source))) {
         return;
     }
     zend_string *str_key;
@@ -444,14 +462,6 @@ ZEND_FUNCTION(Sentry_instrument) {
         }
         ZEND_HASH_FOREACH_END();
     }
-    //
-    // if (extra_metadata != NULL) {
-    //     zend_hash_copy(
-    //         Z_ARRVAL(metadata),
-    //         Z_ARRVAL_P(extra_metadata),
-    //         zval_add_ref
-    //     );
-    // }
 
     sentry_merge_deferred_attributes(&metadata, &attribute_list);
 
