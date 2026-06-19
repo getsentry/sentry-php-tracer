@@ -10,7 +10,7 @@ namespace Sentry {
     function instrument(
         ?string $class_name,
         string $function_name,
-        array $extra_metadata = []
+        mixed ...$metadata
     ): bool {}
 
     /**
@@ -25,6 +25,6 @@ namespace Sentry {
 
     #[\Attribute(\Attribute::TARGET_FUNCTION | \Attribute::TARGET_METHOD)]
     final class Trace {
-        public function __construct(array $metadata = []) {}
+        public function __construct(mixed ...$metadata) {}
     }
 }
