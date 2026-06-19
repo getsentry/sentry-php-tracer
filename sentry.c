@@ -222,14 +222,7 @@ static void sentry_get_attribute_metadata(
         const zend_result result = zend_get_attribute_value(&attribute_arg, attribute, i, execute_data->func->common.scope);
         // result can be unsuccessful if e.g. constants are references that do not exist.
         if (result != SUCCESS) {
-            // clear exception if the attribute has an invalid value so that we don't crash
-            // user code.
             sentry_clear_pending_exception();
-
-            if (!Z_ISUNDEF(attribute_arg)) {
-                zval_ptr_dtor(&attribute_arg);
-            }
-
             continue;
         }
 
