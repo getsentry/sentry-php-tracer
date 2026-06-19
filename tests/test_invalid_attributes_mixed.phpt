@@ -19,6 +19,9 @@ function test_instrumented() {
     echo "Name: " . $data['name'] . PHP_EOL;
     echo "Duration: " . $data['duration'] . PHP_EOL;
     echo "Description: " . $data['metadata']['description'] . PHP_EOL;
+    if (!isset($data['metadata']['name'])) {
+        echo "Works as expected" . PHP_EOL;
+    }
 }); 
 
 test_instrumented();
@@ -28,3 +31,4 @@ test_instrumented();
 Name: test_instrumented
 Duration: %f
 Description: Test
+Works as expected
