@@ -70,7 +70,6 @@ static bool sentry_array_is_list(const zend_array *array) {
 #endif
 }
 
-
 // ==== CALL STATE BEGIN ====
 
 /**
@@ -249,8 +248,6 @@ static void sentry_get_attribute_metadata(
         } else if (Z_TYPE(attribute_arg) == IS_ARRAY) {
             sentry_merge_array(metadata, &attribute_arg);
         }
-
-        sentry_clear_pending_exception();
 
         if (!Z_ISUNDEF(attribute_arg)) {
             zval_ptr_dtor(&attribute_arg);
@@ -478,9 +475,6 @@ ZEND_FUNCTION(Sentry_instrument) {
 
     RETURN_BOOL(inserted != NULL);
 }
-
-
-
 
 ZEND_FUNCTION(Sentry_setEndCallback) {
     zval *callback;
