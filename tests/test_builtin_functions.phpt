@@ -1,5 +1,5 @@
 --TEST--
-Tests a regular function instrumented by instrument
+Tests that built-in functions are ignored by instrument.
 --EXTENSIONS--
 sentry
 --FILE--
@@ -9,9 +9,9 @@ sentry
     echo "Name: " . $data['name'] . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'trim');
+echo \Sentry\instrument(null, 'trim') ? "true" : "false";
 trim("   abcde   ");
 
 ?>
 --EXPECTF--
-Name: trim
+false

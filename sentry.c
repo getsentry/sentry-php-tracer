@@ -359,6 +359,10 @@ ZEND_FUNCTION(Sentry_instrument) {
     }
     zend_string_release(lc_func);
 
+    if (instrumented_func != NULL && instrumented_func->type == ZEND_INTERNAL_FUNCTION) {
+        RETURN_FALSE;
+    }
+
     sentry_instrumentation *instrumentation = emalloc(sizeof(sentry_instrumentation));
     array_init(&instrumentation->metadata);
     zend_hash_init(
