@@ -18,6 +18,8 @@
 #else
 #include <sys/time.h>
 #endif
+#include "span_attributes.h"
+#include "sentry_internal.h"
 
 ZEND_BEGIN_MODULE_GLOBALS(sentry)
     // Functions that should be observed. Values are the metadata arrays per instrumented call.
@@ -266,94 +268,28 @@ ZEND_METHOD(Sentry_Trace, __construct) {
 
 // ===== EXCEPTION ISOLATION START ===
 
-// Stores exception and opline information before invoking the start or end callback.
-// We do that so that the callback runs without any interference from exceptions that might
-// be set from code before.
-typedef struct {
-    zend_object *exception;
-    zend_object *prev_exception;
-    const zend_op *opline_before_exception;
-    bool has_opline;
-    const zend_op *opline;
-} sentry_exception_state;
+bool sentry_enter_internal_call() {
+    bool previous_in_callback = SENTRY_G(in_callback);
+    SENTRY_G(in_callback) = true;
 
-static void sentry_exception_isolation_start(sentry_exception_state *state) {
-    state->exception = EG(exception);
-    state->prev_exception = EG(prev_exception);
-    state->opline_before_exception = EG(opline_before_exception);
-
-    EG(exception) = NULL;
-    EG(prev_exception) = NULL;
-    EG(opline_before_exception) = NULL;
-
-    const zend_execute_data *execute_data = EG(current_execute_data);
-    state->has_opline = execute_data != NULL;
-    state->opline = execute_data ? execute_data->opline : NULL;
+    return previous_in_callback;
 }
 
-static zend_object *sentry_exception_isolation_end(sentry_exception_state *state) {
-    zend_object *suppressed = EG(exception);
-
-    // exit() unwinds via a fake exception that must not be intercepted: leave it
-    // pending so the engine keeps tearing down the stack, and abandon the saved
-    // exception — nothing will ever catch it, so we release our references here.
-    if (UNEXPECTED(suppressed && zend_is_unwind_exit(suppressed))) {
-        if (state->exception != NULL) {
-            OBJ_RELEASE(state->exception);
-        }
-        if (state->prev_exception != NULL) {
-            OBJ_RELEASE(state->prev_exception);
-        }
-        return NULL;
-    }
-
-    // Detach the exception the callback itself may have thrown: it lives on in
-    // `suppressed` and the caller owns and releases it. It must not stay in
-    // EG(exception), where it would mask the original exception we are about to
-    // restore.
-    // We have to set it to NULL otherwise zend_clear_exception will invoke
-    // the exception handler.
-    EG(exception) = NULL;
-    zend_clear_exception();
-
-    EG(exception) = state->exception;
-    EG(prev_exception) = state->prev_exception;
-    EG(opline_before_exception) = state->opline_before_exception;
-
-    zend_execute_data *execute_data = EG(current_execute_data);
-    if (execute_data != NULL && state->has_opline) {
-        execute_data->opline = state->opline;
-    }
-
-    return suppressed;
+void sentry_leave_internal_call(bool previous) {
+    SENTRY_G(in_callback) = previous;
 }
 
-static void sentry_call_user_function_isolated(
+static void sentry_call_user_function_guarded(
     zval *callback,
     zval *retval,
     uint32_t param_count,
     zval *params
 ) {
-    SENTRY_G(in_callback) = true;
+    bool previous = sentry_enter_internal_call();
 
-    sentry_exception_state state;
-    sentry_exception_isolation_start(&state);
+    sentry_call_user_function_isolated(callback, retval, param_count, params);
 
-    call_user_function(
-        EG(function_table),
-        NULL,
-        callback,
-        retval,
-        param_count,
-        params
-    );
-
-    zend_object *suppressed = sentry_exception_isolation_end(&state);
-    if (suppressed != NULL) {
-        OBJ_RELEASE(suppressed);
-    }
-
-    SENTRY_G(in_callback) = false;
+    sentry_leave_internal_call(previous);
 }
 
 // ===== EXCEPTION ISOLATION END ====
@@ -390,8 +326,6 @@ static zend_string *sentry_build_key(zend_string *class_name, zend_string *funct
 ZEND_FUNCTION(Sentry_instrument) {
     zend_string *class_name = NULL;
     zend_string *function_name;
-    // zval metadata;
-    // zval *extra_metadata = NULL;
 
     zval *metadata_args = NULL;
     uint32_t metadata_argc = 0;
@@ -403,33 +337,44 @@ ZEND_FUNCTION(Sentry_instrument) {
         Z_PARAM_VARIADIC_WITH_NAMED(metadata_args, metadata_argc, named_metadata)
     ZEND_PARSE_PARAMETERS_END();
 
-    // If a subclass doesn't override a method from the parent, the scope will
-    // remain of the parent. For example, if A defined method food and B extends A
-    // without overriding, doing (new B())->foo() will show up as A::foo in the
-    // extension. This means that declaring an instrumentation on B::foo will never
-    // trigger. The code below changes the classname so that it will correctly work
-    // for subclasses.
+    zend_function *instrumented_func = NULL;
+    zend_string *lc_func = zend_string_tolower(function_name);
     if (class_name != NULL) {
+        // If a subclass doesn't override a method from the parent, the scope will
+        // remain of the parent. For example, if A defined method food and B extends A
+        // without overriding, doing (new B())->foo() will show up as A::foo in the
+        // extension. This means that declaring an instrumentation on B::foo will never
+        // trigger. The code below changes the classname so that it will correctly work
+        // for subclasses.
         zend_class_entry *ce = zend_lookup_class(class_name);
         if (ce != NULL) {
-            zend_string *lc_func = zend_string_tolower(function_name);
             zend_function *func = zend_hash_find_ptr(&ce->function_table, lc_func);
             if (func != NULL && func->common.scope != NULL) {
                 class_name = func->common.scope->name;
+                instrumented_func = func;
             }
-            zend_string_release(lc_func);
         }
+    } else {
+        instrumented_func = zend_hash_find_ptr(CG(function_table), lc_func);
     }
+    zend_string_release(lc_func);
 
-    zval metadata;
-    array_init(&metadata);
+    sentry_instrumentation *instrumentation = emalloc(sizeof(sentry_instrumentation));
+    array_init(&instrumentation->metadata);
+    zend_hash_init(
+        &instrumentation->span_attributes,
+        4,
+        NULL,
+        sentry_span_attribute_rule_dtor,
+        0
+    );
 
     zval attribute_list;
     ZVAL_UNDEF(&attribute_list);
 
     for (uint32_t i = 0; i < metadata_argc; i++) {
         if (Z_TYPE(metadata_args[i]) == IS_ARRAY) {
-            sentry_merge_array(&metadata, &metadata_args[i]);
+            sentry_merge_array(&instrumentation->metadata, &metadata_args[i]);
         }
     }
 
@@ -438,9 +383,21 @@ ZEND_FUNCTION(Sentry_instrument) {
         zval *value;
 
         ZEND_HASH_FOREACH_STR_KEY_VAL(named_metadata, name, value) {
-            if (name != NULL) {
+            if (name == NULL) {
+                continue;
+            }
+
+            if (sentry_is_span_attributes_arg(name, value)) {
+                if (instrumented_func != NULL) {
+                    sentry_add_span_attribute_rules(
+                        &instrumentation->span_attributes,
+                        instrumented_func,
+                        value
+                    );
+                }
+            } else {
                 sentry_add_named_metadata_arg(
-                    &metadata,
+                    &instrumentation->metadata,
                     &attribute_list,
                     name,
                     value
@@ -450,15 +407,17 @@ ZEND_FUNCTION(Sentry_instrument) {
         ZEND_HASH_FOREACH_END();
     }
 
-    sentry_merge_deferred_attributes(&metadata, &attribute_list);
+    sentry_merge_deferred_attributes(&instrumentation->metadata, &attribute_list);
 
     zend_string *key = sentry_build_key(class_name, function_name);
 
-    const zval* inserted = zend_hash_add(&SENTRY_G(instrumented_functions), key, &metadata);
+    zval instrumentation_zv;
+    ZVAL_PTR(&instrumentation_zv, instrumentation);
+    const zval* inserted = zend_hash_add(&SENTRY_G(instrumented_functions), key, &instrumentation_zv);
 
     // If the element wasn't inserted we have to manually destroy the local value to prevent memory leaks
     if (inserted == NULL) {
-        zval_ptr_dtor(&metadata);
+        sentry_instrumentation_dtor(&instrumentation_zv);
     }
 
     zend_string_release(key);
@@ -547,13 +506,19 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
         execute_data->func->common.scope == NULL ? NULL : execute_data->func->common.scope->name,
         execute_data->func->common.function_name
     );
-    zval *metadata = zend_hash_find(&SENTRY_G(instrumented_functions), key);
+
+    zval *instrumentation_zv = zend_hash_find(&SENTRY_G(instrumented_functions), key);
     zend_string_release(key);
 
+    zval *metadata = NULL;
+    sentry_instrumentation *instrumentation = NULL;
     zval attribute_metadata;
     bool using_attribute_metadata = false;
 
-    if (metadata == NULL) {
+    if (instrumentation_zv != NULL) {
+        instrumentation = Z_PTR_P(instrumentation_zv);
+        metadata = &instrumentation->metadata;
+    } else {
         sentry_get_attribute_metadata(execute_data, &attribute_metadata);
         metadata = &attribute_metadata;
         using_attribute_metadata = true;
@@ -572,6 +537,14 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
 
     ZVAL_COPY(&state->metadata, metadata);
 
+    if (instrumentation != NULL) {
+        sentry_apply_span_attribute_rules(
+            instrumentation,
+            execute_data,
+            &state->metadata
+        );
+    }
+
     if (!Z_ISUNDEF(SENTRY_G(start_callback))) {
         zval data;
         array_init(&data);
@@ -580,13 +553,13 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
         add_assoc_double(&data, "start_time", state->start_time);
 
         zval metadata_zv;
-        ZVAL_COPY(&metadata_zv, metadata);
+        ZVAL_COPY(&metadata_zv, &state->metadata);
         add_assoc_zval(&data, "metadata", &metadata_zv);
 
         zval params[1];
         ZVAL_COPY_VALUE(&params[0], &data);
 
-        sentry_call_user_function_isolated(
+        sentry_call_user_function_guarded(
             &SENTRY_G(start_callback),
             &retval,
             1,
@@ -657,16 +630,14 @@ static void sentry_observer_end(zend_execute_data *execute_data, zval *return_va
 
         ZVAL_COPY_VALUE(&params[1], &state->user_state);
 
-        sentry_call_user_function_isolated(
+        sentry_call_user_function_guarded(
             &SENTRY_G(end_callback),
             &retval,
             2,
             params
         );
 
-        if (!Z_ISUNDEF(retval)) {
-            zval_ptr_dtor(&retval);
-        }
+        sentry_zval_ptr_dtor_undef(&retval);
 
         zval_ptr_dtor(&event);
     }
@@ -740,7 +711,7 @@ static PHP_GINIT_FUNCTION(sentry) {
 
 PHP_RINIT_FUNCTION(sentry) {
     SENTRY_G(in_callback) = false;
-    zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, ZVAL_PTR_DTOR, 0);
+    zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, sentry_instrumentation_dtor, 0);
     zend_hash_init(&SENTRY_G(active_calls), 8, NULL, sentry_call_state_dtor, 0);
 
     ZVAL_UNDEF(&SENTRY_G(start_callback));
@@ -754,13 +725,11 @@ PHP_RSHUTDOWN_FUNCTION(sentry) {
     zend_hash_destroy(&SENTRY_G(active_calls));
 
     if (!Z_ISUNDEF(SENTRY_G(start_callback))) {
-        zval_ptr_dtor(&SENTRY_G(start_callback));
-        ZVAL_UNDEF(&SENTRY_G(start_callback));
+        sentry_zval_ptr_dtor_undef(&SENTRY_G(start_callback));
     }
 
     if (!Z_ISUNDEF(SENTRY_G(end_callback))) {
-        zval_ptr_dtor(&SENTRY_G(end_callback));
-        ZVAL_UNDEF(&SENTRY_G(end_callback));
+        sentry_zval_ptr_dtor_undef(&SENTRY_G(end_callback));
     }
 
     return SUCCESS;
