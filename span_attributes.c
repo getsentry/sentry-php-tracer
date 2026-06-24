@@ -79,12 +79,21 @@ void sentry_add_span_attribute_rules(
     zval *definition;
 
     ZEND_HASH_FOREACH_STR_KEY_VAL(Z_ARRVAL_P(span_attributes), attribute_name, definition) {
-        if (attribute_name == NULL || Z_TYPE_P(definition) != IS_ARRAY) {
+        if (attribute_name == NULL) {
             continue;
         }
 
-        zval *param_name = zend_hash_index_find(Z_ARRVAL_P(definition), 0);
-        zval *path = zend_hash_index_find(Z_ARRVAL_P(definition), 1);
+        zval *param_name = NULL;
+        zval *path = NULL;
+
+        if (Z_TYPE_P(definition) == IS_STRING) {
+            param_name = definition;
+        } else if (Z_TYPE_P(definition) == IS_ARRAY) {
+            param_name = zend_hash_index_find(Z_ARRVAL_P(definition), 0);
+            path = zend_hash_index_find(Z_ARRVAL_P(definition), 1);
+        } else {
+            continue;
+        }
 
         if (param_name == NULL || Z_TYPE_P(param_name) != IS_STRING) {
             continue;
@@ -192,6 +201,12 @@ void sentry_apply_span_attribute_rules(
     zend_execute_data *execute_data,
     zval *metadata
 ) {
+    if (zend_hash_num_elements(&instrumentation->span_attributes) == 0) {
+        return;
+    }
+
+    SEPARATE_ARRAY(metadata);
+
     zval *rule_zv;
 
     ZEND_HASH_FOREACH_VAL(&instrumentation->span_attributes, rule_zv) {
