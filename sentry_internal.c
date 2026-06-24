@@ -10,6 +10,48 @@ void sentry_zval_ptr_dtor_undef(zval *zv) {
     }
 }
 
+static zend_result sentry_call_method_if_exists(
+    zval *object,
+    zend_string *method_name,
+    zval *retval
+) {
+#if PHP_VERSION_ID >= 80200
+    return zend_call_method_if_exists(
+        Z_OBJ_P(object),
+        method_name,
+        retval,
+        0,
+        NULL
+    );
+#else
+    zend_string *lc_method_name = zend_string_tolower(method_name);
+    zend_function *fn = zend_hash_find_ptr(
+        &Z_OBJCE_P(object)->function_table,
+        lc_method_name
+    );
+    zend_string_release(lc_method_name);
+
+    if (fn == NULL) {
+        ZVAL_UNDEF(retval);
+        return FAILURE;
+    }
+
+    zend_call_method(
+        Z_OBJ_P(object),
+        Z_OBJCE_P(object),
+        NULL,
+        ZSTR_VAL(method_name),
+        ZSTR_LEN(method_name),
+        retval,
+        0,
+        NULL,
+        NULL
+    );
+
+    return !Z_ISUNDEF_P(retval) ? SUCCESS : FAILURE;
+#endif
+}
+
 typedef struct {
     zval *object;
     zend_string *name;
@@ -18,12 +60,10 @@ typedef struct {
 static bool sentry_call_method_operation(void *context, zval *retval) {
     sentry_operation_context *ctx = context;
 
-    zend_result result = zend_call_method_if_exists(
-        Z_OBJ_P(ctx->object),
+    zend_result result = sentry_call_method_if_exists(
+        ctx->object,
         ctx->name,
-        retval,
-        0,
-        NULL
+        retval
     );
 
     return result == SUCCESS;
