@@ -58,6 +58,23 @@ bool sentry_resolve_param_index(
         return false;
     }
 
+    // internal functions have a different argument structures than userland functions
+    // and need special handling
+    if (func->type == ZEND_INTERNAL_FUNCTION) {
+        zend_internal_arg_info *arg_info = func->internal_function.arg_info;
+
+        for (uint32_t i = 0; i < func->common.num_args; i++) {
+            const char *name = arg_info[i].name;
+
+            if (name != NULL && zend_string_equals_cstr(param_name, name, strlen(name))) {
+                *param_index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     for (uint32_t i = 0; i < func->common.num_args; i++) {
         zend_arg_info *arg_info = &func->common.arg_info[i];
 
