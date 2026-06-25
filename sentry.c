@@ -512,6 +512,15 @@ static void sentry_observer_end(zend_execute_data *execute_data, zval *return_va
         ZVAL_COPY(&metadata_zv, &state->metadata);
         add_assoc_zval(&event, "metadata", &metadata_zv);
 
+        zend_object *exception = EG(exception);
+        if (exception != NULL) {
+            zval exception_zv;
+            ZVAL_OBJ_COPY(&exception_zv, exception);
+            add_assoc_zval(&event, "exception", &exception_zv);
+        } else {
+            add_assoc_null(&event, "exception");
+        }
+
         ZVAL_COPY_VALUE(&params[0], &event);
 
         ZVAL_COPY_VALUE(&params[1], &state->user_state);
