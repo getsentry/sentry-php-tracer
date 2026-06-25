@@ -372,6 +372,8 @@ ZEND_FUNCTION(Sentry_instrument) {
         sentry_span_attribute_rule_dtor,
         0
     );
+    ZVAL_UNDEF(&instrumentation->span_attributes_definition);
+    instrumentation->span_attributes_resolved = false;
 
     zval attribute_list;
     ZVAL_UNDEF(&attribute_list);
@@ -392,12 +394,15 @@ ZEND_FUNCTION(Sentry_instrument) {
             }
 
             if (sentry_is_span_attributes_arg(name, value)) {
+                ZVAL_COPY(&instrumentation->span_attributes_definition, value);
+
                 if (instrumented_func != NULL) {
                     sentry_add_span_attribute_rules(
                         &instrumentation->span_attributes,
                         instrumented_func,
                         value
                     );
+                    instrumentation->span_attributes_resolved = true;
                 }
             } else {
                 sentry_add_named_metadata_arg(
@@ -540,6 +545,21 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
     state->start_hrtime = zend_hrtime();
 
     ZVAL_COPY(&state->metadata, metadata);
+
+    if (
+        instrumentation != NULL
+        && !instrumentation->span_attributes_resolved
+        && !Z_ISUNDEF(instrumentation->span_attributes_definition)
+    ) {
+        sentry_add_span_attribute_rules(
+            &instrumentation->span_attributes,
+            execute_data->func,
+            &instrumentation->span_attributes_definition
+        );
+
+        instrumentation->span_attributes_resolved = true;
+        sentry_zval_ptr_dtor_undef(&instrumentation->span_attributes_definition);
+    }
 
     if (instrumentation != NULL) {
         sentry_apply_span_attribute_rules(

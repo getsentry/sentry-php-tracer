@@ -7,6 +7,8 @@ typedef struct {
     zval metadata;
     // contains sentry_span_attribute_rule for one instrumented function
     HashTable span_attributes;
+    zval span_attributes_definition;
+    bool span_attributes_resolved;
 } sentry_instrumentation;
 
 typedef enum {

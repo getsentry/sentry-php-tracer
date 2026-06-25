@@ -37,6 +37,7 @@ void sentry_span_attribute_rule_dtor(zval *zv) {
 void sentry_instrumentation_dtor(zval *zv) {
     sentry_instrumentation *instrumentation = Z_PTR_P(zv);
 
+    sentry_zval_ptr_dtor_undef(&instrumentation->span_attributes_definition);
     zval_ptr_dtor(&instrumentation->metadata);
     zend_hash_destroy(&instrumentation->span_attributes);
 
