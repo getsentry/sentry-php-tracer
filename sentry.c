@@ -52,6 +52,23 @@ ZEND_TSRMLS_CACHE_DEFINE();
  */
 static zend_string *sentry_trace_attribute_lcname;
 
+static bool sentry_array_is_list(const zend_array *array) {
+#if PHP_VERSION_ID >= 80100
+    return zend_array_is_list(array);
+#else
+    zend_ulong expected_key = 0;
+    zend_ulong num_key;
+    zend_string *str_key;
+
+    ZEND_HASH_FOREACH_KEY(array, num_key, str_key) {
+        if (str_key != NULL || num_key != expected_key++) {
+            return false;
+        }
+    } ZEND_HASH_FOREACH_END();
+
+    return true;
+#endif
+}
 
 // ==== CALL STATE BEGIN ====
 
@@ -105,6 +122,83 @@ static bool sentry_has_trace_attribute(zend_execute_data *execute_data) {
     return sentry_get_trace_attribute(execute_data) != NULL;
 }
 
+static void sentry_clear_pending_exception(void) {
+    if (EG(exception) != NULL || EG(prev_exception) != NULL) {
+        zend_clear_exception();
+    }
+}
+
+static bool sentry_is_attribute_arg(zend_string *name, zval *value) {
+    return name != NULL
+        && zend_string_equals_literal(name, "attributes")
+        && Z_TYPE_P(value) == IS_ARRAY;
+}
+
+/**
+ * Copies all elements from source to dest if they are using string keys.
+ * If source is a list, it will not do anything.
+ * Integer keys are ignored and will not be copied.
+ */
+static void sentry_merge_array(zval *dest, zval *source) {
+    if (sentry_array_is_list(Z_ARRVAL_P(source))) {
+        return;
+    }
+    zend_string *str_key;
+    zval *value;
+
+    ZEND_HASH_FOREACH_STR_KEY_VAL(Z_ARRVAL_P(source), str_key, value) {
+        if (str_key != NULL) {
+            zval copied_value;
+            ZVAL_COPY(&copied_value, value);
+
+            zend_hash_update(
+                Z_ARRVAL_P(dest),
+                str_key,
+                &copied_value
+            );
+        }
+    }
+    ZEND_HASH_FOREACH_END();
+}
+
+static void sentry_add_named_metadata_arg(
+    zval *metadata,
+    zval *deferred_attributes,
+    zend_string *name,
+    zval *value
+) {
+    if (sentry_is_attribute_arg(name, value)) {
+        if (!Z_ISUNDEF_P(deferred_attributes)) {
+            zval_ptr_dtor(deferred_attributes);
+        }
+
+        ZVAL_COPY(deferred_attributes, value);
+        return;
+    }
+
+    zval copied_value;
+    ZVAL_COPY(&copied_value, value);
+
+    zend_hash_update(
+        Z_ARRVAL_P(metadata),
+        name,
+        &copied_value
+    );
+}
+
+static void sentry_merge_deferred_attributes(
+    zval *metadata,
+    zval *deferred_attributes
+) {
+    if (Z_ISUNDEF_P(deferred_attributes)) {
+        return;
+    }
+
+    sentry_merge_array(metadata, deferred_attributes);
+    zval_ptr_dtor(deferred_attributes);
+    ZVAL_UNDEF(deferred_attributes);
+}
+
 static void sentry_get_attribute_metadata(
     zend_execute_data *execute_data,
     zval *metadata
@@ -112,42 +206,59 @@ static void sentry_get_attribute_metadata(
     array_init(metadata);
 
     zend_attribute *attribute = sentry_get_trace_attribute(execute_data);
-    if (attribute != NULL && attribute->argc > 0) {
+    if (attribute == NULL || attribute->argc == 0) {
+        return;
+    }
+
+    // this gets populated if the "attribute" named argument exists.
+    // We will store it here and merge it last so that it always overwrites existing keys.
+    zval attribute_list;
+    ZVAL_UNDEF(&attribute_list);
+
+    for (uint32_t i = 0; i < attribute->argc; i++) {
         zval attribute_arg;
         ZVAL_UNDEF(&attribute_arg);
 
-        if (zend_get_attribute_value(
-            &attribute_arg,
-            attribute,
-            0,
-            execute_data->func->common.scope
-        ) == SUCCESS && Z_TYPE(attribute_arg) == IS_ARRAY) {
-            zend_hash_copy(
-                Z_ARRVAL_P(metadata),
-                Z_ARRVAL(attribute_arg),
-                zval_add_ref
-            );
+        const zend_result result = zend_get_attribute_value(&attribute_arg, attribute, i, execute_data->func->common.scope);
+        // result can be unsuccessful if e.g. constants are references that do not exist.
+        if (result != SUCCESS) {
+            sentry_clear_pending_exception();
+            continue;
         }
 
-        zend_object *ex = EG(exception);
-        if (ex != NULL) {
-            EG(exception) = NULL;
-            OBJ_RELEASE(ex);
+        zend_string *arg_name = attribute->args[i].name;
+
+        if (arg_name != NULL) {
+            sentry_add_named_metadata_arg(
+                metadata,
+                &attribute_list,
+                arg_name,
+                &attribute_arg
+            );
+        } else if (Z_TYPE(attribute_arg) == IS_ARRAY) {
+            sentry_merge_array(metadata, &attribute_arg);
         }
 
         if (!Z_ISUNDEF(attribute_arg)) {
             zval_ptr_dtor(&attribute_arg);
         }
+
+    }
+
+    if (!Z_ISUNDEF(attribute_list)) {
+        sentry_merge_array(metadata, &attribute_list);
+        zval_ptr_dtor(&attribute_list);
     }
 }
 
 
 ZEND_METHOD(Sentry_Trace, __construct) {
-    zval *metadata = NULL;
+    zval *args = NULL;
+    uint32_t argc = 0;
+    HashTable *named_args = NULL;
 
-    ZEND_PARSE_PARAMETERS_START(0, 1)
-        Z_PARAM_OPTIONAL
-        Z_PARAM_ARRAY(metadata)
+    ZEND_PARSE_PARAMETERS_START(0, -1)
+        Z_PARAM_VARIADIC_WITH_NAMED(args, argc, named_args)
     ZEND_PARSE_PARAMETERS_END();
 }
 
@@ -279,14 +390,17 @@ static zend_string *sentry_build_key(zend_string *class_name, zend_string *funct
 ZEND_FUNCTION(Sentry_instrument) {
     zend_string *class_name = NULL;
     zend_string *function_name;
-    zval metadata;
-    zval *extra_metadata = NULL;
+    // zval metadata;
+    // zval *extra_metadata = NULL;
 
-    ZEND_PARSE_PARAMETERS_START(2,3)
+    zval *metadata_args = NULL;
+    uint32_t metadata_argc = 0;
+    HashTable *named_metadata = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(2,-1)
         Z_PARAM_STR_OR_NULL(class_name)
         Z_PARAM_STR(function_name)
-        Z_PARAM_OPTIONAL
-        Z_PARAM_ARRAY(extra_metadata)
+        Z_PARAM_VARIADIC_WITH_NAMED(metadata_args, metadata_argc, named_metadata)
     ZEND_PARSE_PARAMETERS_END();
 
     // If a subclass doesn't override a method from the parent, the scope will
@@ -307,15 +421,36 @@ ZEND_FUNCTION(Sentry_instrument) {
         }
     }
 
+    zval metadata;
     array_init(&metadata);
 
-    if (extra_metadata != NULL) {
-        zend_hash_copy(
-            Z_ARRVAL(metadata),
-            Z_ARRVAL_P(extra_metadata),
-            zval_add_ref
-        );
+    zval attribute_list;
+    ZVAL_UNDEF(&attribute_list);
+
+    for (uint32_t i = 0; i < metadata_argc; i++) {
+        if (Z_TYPE(metadata_args[i]) == IS_ARRAY) {
+            sentry_merge_array(&metadata, &metadata_args[i]);
+        }
     }
+
+    if (named_metadata != NULL) {
+        zend_string *name;
+        zval *value;
+
+        ZEND_HASH_FOREACH_STR_KEY_VAL(named_metadata, name, value) {
+            if (name != NULL) {
+                sentry_add_named_metadata_arg(
+                    &metadata,
+                    &attribute_list,
+                    name,
+                    value
+                );
+            }
+        }
+        ZEND_HASH_FOREACH_END();
+    }
+
+    sentry_merge_deferred_attributes(&metadata, &attribute_list);
 
     zend_string *key = sentry_build_key(class_name, function_name);
 
@@ -330,9 +465,6 @@ ZEND_FUNCTION(Sentry_instrument) {
 
     RETURN_BOOL(inserted != NULL);
 }
-
-
-
 
 ZEND_FUNCTION(Sentry_setEndCallback) {
     zval *callback;

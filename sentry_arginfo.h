@@ -1,10 +1,10 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: a8f0df9a0ea7aa5af60848effeda1f1ac2952c61 */
+ * Stub hash: 8f9ab3a122f4878e771f49c4114c3703cefba0cd */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Sentry_instrument, 0, 2, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, class_name, IS_STRING, 1)
 	ZEND_ARG_TYPE_INFO(0, function_name, IS_STRING, 0)
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, extra_metadata, IS_ARRAY, 0, "[]")
+	ZEND_ARG_VARIADIC_TYPE_INFO(0, metadata, IS_MIXED, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Sentry_setEndCallback, 0, 1, _IS_BOOL, 0)
@@ -14,7 +14,7 @@ ZEND_END_ARG_INFO()
 #define arginfo_Sentry_setStartCallback arginfo_Sentry_setEndCallback
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Sentry_Trace___construct, 0, 0, 0)
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, metadata, IS_ARRAY, 0, "[]")
+	ZEND_ARG_VARIADIC_TYPE_INFO(0, metadata, IS_MIXED, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_FUNCTION(Sentry_instrument);
