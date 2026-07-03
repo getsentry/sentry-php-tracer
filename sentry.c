@@ -20,7 +20,12 @@
 #endif
 #include "sentry_log.h"
 
+#define SENTRY_PREPROCESSING_ARG "preprocessing"
+#define SENTRY_POSTPROCESSING_ARG "postprocessing"
+
 void sentry_emit_log(int level, const char *message);
+
+static void sentry_emit_logf(int level, const char *format, ...) ZEND_ATTRIBUTE_FORMAT(printf, 2, 3);
 
 static void sentry_emit_callback_failure_log(
     const char *failure_log_message,
@@ -29,8 +34,33 @@ static void sentry_emit_callback_failure_log(
 
 static zend_string *sentry_build_display_name(zend_string *class_name, zend_string *function_name);
 
+typedef struct {
+    // Key Value store for metadata
+    zval metadata;
+
+    zval preprocessing_callback;
+
+    zval postprocessing_callback;
+} sentry_instrumented_function;
+
+static void sentry_instrumented_function_free(sentry_instrumented_function *config) {
+    zval_ptr_dtor(&config->metadata);
+
+    if (!Z_ISUNDEF(config->preprocessing_callback)) {
+        zval_ptr_dtor(&config->preprocessing_callback);
+    }
+    if (!Z_ISUNDEF(config->postprocessing_callback)) {
+        zval_ptr_dtor(&config->postprocessing_callback);
+    }
+    efree(config);
+}
+
+static void sentry_instrumented_function_dtor(zval *zv) {
+    sentry_instrumented_function_free(Z_PTR_P(zv));
+}
+
 ZEND_BEGIN_MODULE_GLOBALS(sentry)
-    // Functions that should be observed. Values are the metadata arrays per instrumented call.
+    // Functions that should be observed. Values are sentry_instrumented_function pointers.
     HashTable instrumented_functions;
 
     // Call state of currently executing functions
@@ -102,7 +132,22 @@ typedef struct {
     zend_hrtime_t start_hrtime;
     zval user_state;
     zval metadata;
+    zval postprocessing_callback;
 } sentry_call_state;
+
+static sentry_call_state *sentry_new_call_state(zend_string *name)
+{
+    struct timeval tv;
+    (void) gettimeofday(&tv, NULL);
+
+    sentry_call_state *state = emalloc(sizeof(sentry_call_state));
+    state->name = name;
+    state->start_time = tv.tv_sec + tv.tv_usec / 1000000.0;
+    state->start_hrtime = zend_hrtime();
+    ZVAL_UNDEF(&state->postprocessing_callback);
+
+    return state;
+}
 
 /**
  * Destructor for the call state struct
@@ -113,6 +158,9 @@ static void sentry_call_state_dtor(zval *zv) {
     zend_string_release(state->name);
     zval_ptr_dtor(&state->user_state);
     zval_ptr_dtor(&state->metadata);
+    if (!Z_ISUNDEF(state->postprocessing_callback)) {
+        zval_ptr_dtor(&state->postprocessing_callback);
+    }
 
     efree(state);
 }
@@ -246,27 +294,22 @@ static void sentry_get_attribute_metadata(
                 execute_data->func->common.function_name
             );
 
-            zend_string *message;
-
             if (arg_name != NULL) {
-                message = zend_strpprintf(
-                    0,
+                sentry_emit_logf(
+                    SENTRY_LOG_WARNING,
                     "Sentry Trace attribute argument '%s' on '%s' could not be evaluated and was ignored.",
                     ZSTR_VAL(arg_name),
                     ZSTR_VAL(display_name)
                 );
             } else {
-                message = zend_strpprintf(
-                    0,
+                sentry_emit_logf(
+                    SENTRY_LOG_WARNING,
                     "Sentry Trace attribute argument #%u on '%s' could not be evaluated and was ignored.",
                     i + 1,
                     ZSTR_VAL(display_name)
                 );
             }
 
-            sentry_emit_log(SENTRY_LOG_WARNING, ZSTR_VAL(message));
-
-            zend_string_release(message);
             zend_string_release(display_name);
 
             sentry_clear_pending_exception();
@@ -380,6 +423,9 @@ static void sentry_call_user_function_isolated(
     zval *params,
     const char *failure_log_message
 ) {
+    // call_user_function may leave retval untouched on failure
+    ZVAL_UNDEF(retval);
+
     bool was_in_callback = SENTRY_G(in_callback);
     SENTRY_G(in_callback) = true;
 
@@ -472,6 +518,12 @@ ZEND_FUNCTION(Sentry_instrument) {
     zval metadata;
     array_init(&metadata);
 
+    zval preprocessing_callback;
+    ZVAL_UNDEF(&preprocessing_callback);
+
+    zval postprocessing_callback;
+    ZVAL_UNDEF(&postprocessing_callback);
+
     zval attribute_list;
     ZVAL_UNDEF(&attribute_list);
 
@@ -486,6 +538,32 @@ ZEND_FUNCTION(Sentry_instrument) {
         zval *value;
 
         ZEND_HASH_FOREACH_STR_KEY_VAL(named_metadata, name, value) {
+            zval *callback_target = NULL;
+
+            if (name != NULL) {
+                if (zend_string_equals_literal(name, SENTRY_PREPROCESSING_ARG)) {
+                    callback_target = &preprocessing_callback;
+                } else if (zend_string_equals_literal(name, SENTRY_POSTPROCESSING_ARG)) {
+                    callback_target = &postprocessing_callback;
+                }
+            }
+
+            if (callback_target != NULL) {
+                if (!zend_is_callable(value, 0, NULL)) {
+                    zend_string *display_name = sentry_build_display_name(class_name, function_name);
+                    sentry_emit_logf(
+                        SENTRY_LOG_WARNING,
+                        "Sentry instrumentation argument \"%s\" for '%s' is not a valid callback and was ignored.",
+                        ZSTR_VAL(name),
+                        ZSTR_VAL(display_name)
+                    );
+                    zend_string_release(display_name);
+                    continue;
+                }
+                ZVAL_COPY(callback_target, value);
+                continue;
+            }
+
             if (name != NULL) {
                 sentry_add_named_metadata_arg(
                     &metadata,
@@ -502,23 +580,27 @@ ZEND_FUNCTION(Sentry_instrument) {
 
     zend_string *key = sentry_build_key(class_name, function_name);
 
-    const zval* inserted = zend_hash_add(&SENTRY_G(instrumented_functions), key, &metadata);
+    sentry_instrumented_function *config = emalloc(sizeof(sentry_instrumented_function));
+    config->metadata = metadata;
+    config->preprocessing_callback = preprocessing_callback;
+    config->postprocessing_callback = postprocessing_callback;
+
+    zval config_zv;
+    ZVAL_PTR(&config_zv, config);
+
+    const zval* inserted = zend_hash_add(&SENTRY_G(instrumented_functions), key, &config_zv);
 
     // If the element wasn't inserted we have to manually destroy the local value to prevent memory leaks
     if (inserted == NULL) {
         zend_string *display_name = sentry_build_display_name(class_name, function_name);
-        zend_string *message = zend_strpprintf(
-            0,
+        sentry_emit_logf(
+            SENTRY_LOG_DEBUG,
             "Sentry instrumentation target '%s' is already registered and was ignored.",
             ZSTR_VAL(display_name)
         );
-
-        sentry_emit_log(SENTRY_LOG_DEBUG, ZSTR_VAL(message));
-
-        zend_string_release(message);
         zend_string_release(display_name);
 
-        zval_ptr_dtor(&metadata);
+        sentry_instrumented_function_free(config);
     }
 
     zend_string_release(key);
@@ -599,7 +681,6 @@ void sentry_emit_log(int level, const char *message) {
     SENTRY_G(in_log_callback) = true;
 
     zval retval;
-    ZVAL_UNDEF(&retval);
 
     zval params[2];
     ZVAL_LONG(&params[0], level);
@@ -613,12 +694,23 @@ void sentry_emit_log(int level, const char *message) {
         NULL
     );
 
-    if (!Z_ISUNDEF(retval)) {
-        zval_ptr_dtor(&retval);
-    }
-
+    zval_ptr_dtor(&retval);
     zval_ptr_dtor(&params[1]);
     SENTRY_G(in_log_callback) = false;
+}
+
+static void sentry_emit_logf(int level, const char *format, ...) {
+    if (Z_ISUNDEF(SENTRY_G(log_callback)) || SENTRY_G(in_log_callback)) {
+        return;
+    }
+
+    va_list args;
+    va_start(args, format);
+    zend_string *message = zend_vstrpprintf(0, format, args);
+    va_end(args);
+
+    sentry_emit_log(level, ZSTR_VAL(message));
+    zend_string_release(message);
 }
 
 static void sentry_emit_callback_failure_log(
@@ -654,6 +746,126 @@ static bool sentry_should_observe(zend_execute_data *execute_data) {
     return sentry_has_trace_attribute(execute_data);
 }
 
+static zval *sentry_get_call_argument(zend_execute_data *execute_data, uint32_t index) {
+    const zend_function *func = execute_data->func;
+
+    if (ZEND_USER_CODE(func->type) && index >= func->op_array.num_args) {
+        zval *extra_args = ZEND_CALL_VAR_NUM(
+            execute_data,
+            func->op_array.last_var + func->op_array.T
+        );
+        return extra_args + (index - func->op_array.num_args);
+    }
+
+    return ZEND_CALL_ARG(execute_data, index + 1);
+}
+
+/**
+ * Merges all data from retval and stores them in metadata if retval is an array.
+ * If not, it will emit a warning message.
+ */
+static void sentry_apply_processing_result(
+    zval *retval,
+    zval *metadata,
+    const char *warning_message
+) {
+    if (Z_TYPE_P(retval) == IS_ARRAY) {
+        SEPARATE_ARRAY(metadata);
+        sentry_merge_array(metadata, retval);
+    } else if (!Z_ISUNDEF_P(retval) && Z_TYPE_P(retval) != IS_NULL) {
+        sentry_emit_log(SENTRY_LOG_WARNING, warning_message);
+    }
+}
+
+/**
+ * Collects all parameters from the currently instrumented function and invokes
+ * the passed callback with those parameters.
+ * Merged any array shaped data into metadata so it's available in the start and end callback.
+ */
+static void sentry_run_preprocessing_callback(
+    zend_execute_data *execute_data,
+    zval *callback,
+    zval *metadata
+) {
+    uint32_t argument_count = ZEND_CALL_NUM_ARGS(execute_data);
+    zval *params = safe_emalloc(argument_count, sizeof(zval), 0);
+
+    for (uint32_t i = 0; i < argument_count; i++) {
+        zval *argument = sentry_get_call_argument(execute_data, i);
+
+        if (Z_TYPE_P(argument) == IS_UNDEF) {
+            ZVAL_NULL(&params[i]);
+        } else {
+            ZVAL_COPY(&params[i], argument);
+        }
+    }
+
+    zval retval;
+
+    sentry_call_user_function_isolated(
+        callback,
+        &retval,
+        argument_count,
+        params,
+        "Sentry preprocessing callback threw an exception and was ignored."
+    );
+
+    for (uint32_t i = 0; i < argument_count; i++) {
+        zval_ptr_dtor(&params[i]);
+    }
+    efree(params);
+
+    sentry_apply_processing_result(
+        &retval,
+        metadata,
+        "Sentry preprocessing callback returned a non-array value and was ignored."
+    );
+
+    zval_ptr_dtor(&retval);
+}
+
+/**
+ * Captures the return value of the instrumented function if no exception was thrown
+ * and invokes the passed callback with it.
+ * Merged any array shaped data into metadata so it's available in the end callback.
+ */
+static void sentry_run_postprocessing_callback(
+    zval *return_value,
+    sentry_call_state *state
+) {
+    if (Z_ISUNDEF(state->postprocessing_callback) || EG(exception) != NULL) {
+        return;
+    }
+
+    // if return_value is NULL or undefined, it means that the function failed to
+    // return at all. One scenarios when this happens is when an exception is thrown
+    if (return_value == NULL || Z_ISUNDEF_P(return_value)) {
+        return;
+    }
+
+    zval params[1];
+    ZVAL_COPY(&params[0], return_value);
+
+    zval retval;
+
+    sentry_call_user_function_isolated(
+        &state->postprocessing_callback,
+        &retval,
+        1,
+        params,
+        "Sentry postprocessing callback threw an exception and was ignored."
+    );
+
+    zval_ptr_dtor(&params[0]);
+
+    sentry_apply_processing_result(
+        &retval,
+        &state->metadata,
+        "Sentry postprocessing callback returned a non-array value and was ignored."
+    );
+    zval_ptr_dtor(&retval);
+}
+
 static void sentry_observer_begin(zend_execute_data *execute_data) {
     if (SENTRY_G(in_callback)) {
         return;
@@ -670,8 +882,11 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
         execute_data->func->common.scope == NULL ? NULL : execute_data->func->common.scope->name,
         execute_data->func->common.function_name
     );
-    zval *metadata = zend_hash_find(&SENTRY_G(instrumented_functions), key);
+    zval *config_zv = zend_hash_find(&SENTRY_G(instrumented_functions), key);
     zend_string_release(key);
+
+    sentry_instrumented_function *config = config_zv == NULL ? NULL : Z_PTR_P(config_zv);
+    zval *metadata = config == NULL ? NULL : &config->metadata;
 
     zval attribute_metadata;
     bool using_attribute_metadata = false;
@@ -685,15 +900,21 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
     zval retval;
     ZVAL_UNDEF(&retval);
 
-    struct timeval tv;
-    (void) gettimeofday(&tv, NULL);
-
-    sentry_call_state *state = emalloc(sizeof(sentry_call_state));
-    state->name = name;
-    state->start_time = tv.tv_sec + tv.tv_usec / 1000000.0;
-    state->start_hrtime = zend_hrtime();
-
+    sentry_call_state *state = sentry_new_call_state(name);
     ZVAL_COPY(&state->metadata, metadata);
+
+    if (config != NULL) {
+        if (!Z_ISUNDEF(config->postprocessing_callback)) {
+            ZVAL_COPY(&state->postprocessing_callback, &config->postprocessing_callback);
+        }
+        if (!Z_ISUNDEF(config->preprocessing_callback)) {
+            sentry_run_preprocessing_callback(
+                execute_data,
+                &config->preprocessing_callback,
+                &state->metadata
+            );
+        }
+    }
 
     if (!Z_ISUNDEF(SENTRY_G(start_callback))) {
         zval data;
@@ -703,7 +924,7 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
         add_assoc_double(&data, "start_time", state->start_time);
 
         zval metadata_zv;
-        ZVAL_COPY(&metadata_zv, metadata);
+        ZVAL_COPY(&metadata_zv, &state->metadata);
         add_assoc_zval(&data, "metadata", &metadata_zv);
 
         zval params[1];
@@ -735,7 +956,6 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
     }
 }
 
-
 static void sentry_observer_end(zend_execute_data *execute_data, zval *return_value) {
     zend_ulong hash_key = (zend_ulong) (uintptr_t) execute_data;
 
@@ -751,10 +971,14 @@ static void sentry_observer_end(zend_execute_data *execute_data, zval *return_va
     double duration = elapsed_ns / 1000000.0;
     double end_time = state->start_time + (duration / 1000.0);
 
+    sentry_run_postprocessing_callback(return_value, state);
+
     if (!Z_ISUNDEF(SENTRY_G(end_callback))) {
         zval event;
         zval retval;
-        ZVAL_UNDEF(&retval);
+
+        // 1. array with instrumented data + metadata
+        // 2. whatever was returned in the start callback
         zval params[2];
 
         array_init(&event);
@@ -789,10 +1013,7 @@ static void sentry_observer_end(zend_execute_data *execute_data, zval *return_va
             "Sentry end callback threw an exception and was ignored."
         );
 
-        if (!Z_ISUNDEF(retval)) {
-            zval_ptr_dtor(&retval);
-        }
-
+        zval_ptr_dtor(&retval);
         zval_ptr_dtor(&event);
     }
 
@@ -868,7 +1089,7 @@ static PHP_GINIT_FUNCTION(sentry) {
 PHP_RINIT_FUNCTION(sentry) {
     SENTRY_G(in_callback) = false;
     SENTRY_G(in_log_callback) = false;
-    zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, ZVAL_PTR_DTOR, 0);
+    zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, sentry_instrumented_function_dtor, 0);
     zend_hash_init(&SENTRY_G(active_calls), 8, NULL, sentry_call_state_dtor, 0);
 
     ZVAL_UNDEF(&SENTRY_G(start_callback));
