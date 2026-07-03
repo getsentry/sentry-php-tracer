@@ -20,12 +20,7 @@
 #endif
 #include "sentry_log.h"
 
-#define SENTRY_PREPROCESSING_ARG "preprocessing"
-#define SENTRY_POSTPROCESSING_ARG "postprocessing"
-
 void sentry_emit_log(int level, const char *message);
-
-static void sentry_emit_logf(int level, const char *format, ...) ZEND_ATTRIBUTE_FORMAT(printf, 2, 3);
 
 static void sentry_emit_callback_failure_log(
     const char *failure_log_message,
@@ -33,31 +28,6 @@ static void sentry_emit_callback_failure_log(
 );
 
 static zend_string *sentry_build_display_name(zend_string *class_name, zend_string *function_name);
-
-typedef struct {
-    // Key Value store for metadata
-    zval metadata;
-
-    zval preprocessing_callback;
-
-    zval postprocessing_callback;
-} sentry_instrumented_function;
-
-static void sentry_instrumented_function_free(sentry_instrumented_function *config) {
-    zval_ptr_dtor(&config->metadata);
-
-    if (!Z_ISUNDEF(config->preprocessing_callback)) {
-        zval_ptr_dtor(&config->preprocessing_callback);
-    }
-    if (!Z_ISUNDEF(config->postprocessing_callback)) {
-        zval_ptr_dtor(&config->postprocessing_callback);
-    }
-    efree(config);
-}
-
-static void sentry_instrumented_function_dtor(zval *zv) {
-    sentry_instrumented_function_free(Z_PTR_P(zv));
-}
 
 ZEND_BEGIN_MODULE_GLOBALS(sentry)
     // Functions that should be observed. Values are sentry_instrumented_function pointers.
@@ -294,22 +264,27 @@ static void sentry_get_attribute_metadata(
                 execute_data->func->common.function_name
             );
 
+            zend_string *message;
+
             if (arg_name != NULL) {
-                sentry_emit_logf(
-                    SENTRY_LOG_WARNING,
+                message = zend_strpprintf(
+                    0,
                     "Sentry Trace attribute argument '%s' on '%s' could not be evaluated and was ignored.",
                     ZSTR_VAL(arg_name),
                     ZSTR_VAL(display_name)
                 );
             } else {
-                sentry_emit_logf(
-                    SENTRY_LOG_WARNING,
+                message = zend_strpprintf(
+                    0,
                     "Sentry Trace attribute argument #%u on '%s' could not be evaluated and was ignored.",
                     i + 1,
                     ZSTR_VAL(display_name)
                 );
             }
 
+            sentry_emit_log(SENTRY_LOG_WARNING, ZSTR_VAL(message));
+
+            zend_string_release(message);
             zend_string_release(display_name);
 
             sentry_clear_pending_exception();
@@ -423,9 +398,6 @@ static void sentry_call_user_function_isolated(
     zval *params,
     const char *failure_log_message
 ) {
-    // call_user_function may leave retval untouched on failure
-    ZVAL_UNDEF(retval);
-
     bool was_in_callback = SENTRY_G(in_callback);
     SENTRY_G(in_callback) = true;
 
@@ -593,14 +565,18 @@ ZEND_FUNCTION(Sentry_instrument) {
     // If the element wasn't inserted we have to manually destroy the local value to prevent memory leaks
     if (inserted == NULL) {
         zend_string *display_name = sentry_build_display_name(class_name, function_name);
-        sentry_emit_logf(
-            SENTRY_LOG_DEBUG,
+        zend_string *message = zend_strpprintf(
+            0,
             "Sentry instrumentation target '%s' is already registered and was ignored.",
             ZSTR_VAL(display_name)
         );
+
+        sentry_emit_log(SENTRY_LOG_DEBUG, ZSTR_VAL(message));
+
+        zend_string_release(message);
         zend_string_release(display_name);
 
-        sentry_instrumented_function_free(config);
+        zval_ptr_dtor(&metadata);
     }
 
     zend_string_release(key);
@@ -681,6 +657,7 @@ void sentry_emit_log(int level, const char *message) {
     SENTRY_G(in_log_callback) = true;
 
     zval retval;
+    ZVAL_UNDEF(&retval);
 
     zval params[2];
     ZVAL_LONG(&params[0], level);
@@ -694,23 +671,12 @@ void sentry_emit_log(int level, const char *message) {
         NULL
     );
 
-    zval_ptr_dtor(&retval);
-    zval_ptr_dtor(&params[1]);
-    SENTRY_G(in_log_callback) = false;
-}
-
-static void sentry_emit_logf(int level, const char *format, ...) {
-    if (Z_ISUNDEF(SENTRY_G(log_callback)) || SENTRY_G(in_log_callback)) {
-        return;
+    if (!Z_ISUNDEF(retval)) {
+        zval_ptr_dtor(&retval);
     }
 
-    va_list args;
-    va_start(args, format);
-    zend_string *message = zend_vstrpprintf(0, format, args);
-    va_end(args);
-
-    sentry_emit_log(level, ZSTR_VAL(message));
-    zend_string_release(message);
+    zval_ptr_dtor(&params[1]);
+    SENTRY_G(in_log_callback) = false;
 }
 
 static void sentry_emit_callback_failure_log(
@@ -1089,7 +1055,7 @@ static PHP_GINIT_FUNCTION(sentry) {
 PHP_RINIT_FUNCTION(sentry) {
     SENTRY_G(in_callback) = false;
     SENTRY_G(in_log_callback) = false;
-    zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, sentry_instrumented_function_dtor, 0);
+    zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, ZVAL_PTR_DTOR, 0);
     zend_hash_init(&SENTRY_G(active_calls), 8, NULL, sentry_call_state_dtor, 0);
 
     ZVAL_UNDEF(&SENTRY_G(start_callback));
