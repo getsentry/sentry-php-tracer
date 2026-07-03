@@ -7,6 +7,11 @@
  */
 
 namespace Sentry {
+    const LOG_DEBUG = 100;
+    const LOG_INFO = 200;
+    const LOG_WARNING = 300;
+    const LOG_ERROR = 400;
+
     function instrument(
         ?string $class_name,
         string $function_name,
@@ -22,6 +27,11 @@ namespace Sentry {
      * @phpstan-param callable(array{name: string, start_time: float, metadata: array<string, mixed>}): mixed $callback
      */
     function setStartCallback(callable $callback): bool {}
+
+    /**
+     * @phpstan-param callable(int, string): mixed $callback
+     */
+    function setLogCallback(callable $callback): bool {}
 
     #[\Attribute(\Attribute::TARGET_FUNCTION | \Attribute::TARGET_METHOD)]
     final class Trace {
