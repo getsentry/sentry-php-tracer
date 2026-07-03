@@ -837,6 +837,8 @@ static void sentry_run_postprocessing_callback(
         return;
     }
 
+    // if return_value is NULL or undefined, it means that the function failed to
+    // return at all. One scenarios when this happens is when an exception is thrown
     if (return_value == NULL || Z_ISUNDEF_P(return_value)) {
         return;
     }
