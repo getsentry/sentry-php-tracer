@@ -465,11 +465,29 @@ static void sentry_call_user_function_isolated(
 
 // ===== EXCEPTION ISOLATION END ====
 
-static zend_string *sentry_to_key(zend_string *name) {
-    if (name == NULL) {
-        return NULL;
+static zend_string *sentry_join_class_function(
+    const zend_string *class_name,
+    const zend_string *function_name,
+    const bool lowercase
+) {
+    size_t class_len = ZSTR_LEN(class_name);
+    size_t function_len = ZSTR_LEN(function_name);
+    zend_string *result = zend_string_alloc(class_len + 2 + function_len, 0);
+    char *dest = ZSTR_VAL(result);
+
+    if (lowercase) {
+        zend_str_tolower_copy(dest, ZSTR_VAL(class_name), class_len);
+        zend_str_tolower_copy(dest + class_len + 2, ZSTR_VAL(function_name), function_len);
+    } else {
+        memcpy(dest, ZSTR_VAL(class_name), class_len);
+        memcpy(dest + class_len + 2, ZSTR_VAL(function_name), function_len);
+        dest[class_len + 2 + function_len] = '\0';
     }
-    return zend_string_tolower(name);
+
+    dest[class_len] = ':';
+    dest[class_len + 1] = ':';
+
+    return result;
 }
 
 static zend_string *sentry_build_display_name(zend_string *class_name, zend_string *function_name) {
@@ -480,18 +498,19 @@ static zend_string *sentry_build_display_name(zend_string *class_name, zend_stri
     if (class_name == NULL) {
         return zend_string_copy(function_name);
     }
-    return zend_strpprintf(0, "%s::%s", ZSTR_VAL(class_name), ZSTR_VAL(function_name));
+    return sentry_join_class_function(class_name, function_name, /* lowercase */ false);
 }
 
 static zend_string *sentry_build_key(zend_string *class_name, zend_string *function_name) {
-    zend_string *name = sentry_build_display_name(class_name, function_name);
-    if (name == NULL) {
+    if (function_name == NULL) {
         return NULL;
     }
-    zend_string *key = sentry_to_key(name);
-    zend_string_release(name);
 
-    return key;
+    if (class_name == NULL) {
+        return zend_string_tolower(function_name);
+    }
+
+    return sentry_join_class_function(class_name, function_name, /* lowercase */ true);
 }
 
 ZEND_FUNCTION(Sentry_instrument) {
