@@ -753,23 +753,27 @@ static void sentry_emit_callback_failure_log(
     zend_string_release(message);
 }
 
-static bool sentry_should_observe(zend_execute_data *execute_data) {
-    zend_class_entry *caller_class = execute_data->func->common.scope;
+static sentry_instrumented_function *sentry_find_registration(const zend_function *func) {
+    if (zend_hash_num_elements(&SENTRY_G(instrumented_functions)) == 0) {
+        return NULL;
+    }
 
     zend_string *key = sentry_build_key(
-        caller_class == NULL ? NULL : caller_class->name,
-        execute_data->func->common.function_name
+        func->common.scope == NULL ? NULL : func->common.scope->name,
+        func->common.function_name
     );
+    zval *config_zv = zend_hash_find(&SENTRY_G(instrumented_functions), key);
+    zend_string_release(key);
 
-    if (key == NULL) {
+    return config_zv == NULL ? NULL : Z_PTR_P(config_zv);
+}
+
+static bool sentry_should_observe(zend_execute_data *execute_data) {
+    if (execute_data->func->common.function_name == NULL) {
         return false;
     }
 
-    const bool explicitly_instrumented = zend_hash_exists(&SENTRY_G(instrumented_functions), key);
-
-    zend_string_release(key);
-
-    if (explicitly_instrumented) {
+    if (sentry_find_registration(execute_data->func) != NULL) {
         return true;
     }
 
@@ -908,14 +912,7 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
         execute_data->func->common.function_name
     );
 
-    zend_string *key = sentry_build_key(
-        execute_data->func->common.scope == NULL ? NULL : execute_data->func->common.scope->name,
-        execute_data->func->common.function_name
-    );
-    zval *config_zv = zend_hash_find(&SENTRY_G(instrumented_functions), key);
-    zend_string_release(key);
-
-    sentry_instrumented_function *config = config_zv == NULL ? NULL : Z_PTR_P(config_zv);
+    sentry_instrumented_function *config = sentry_find_registration(execute_data->func);
     zval *metadata = config == NULL ? NULL : &config->metadata;
 
     zval attribute_metadata;
