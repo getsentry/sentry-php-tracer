@@ -99,6 +99,17 @@ ZEND_TSRMLS_CACHE_DEFINE();
  */
 static zend_string *sentry_trace_attribute_lcname;
 
+/**
+ * zend_string includes the hash of the string so interning here
+ * will save us calculating the hash for each function
+ */
+static zend_string *sentry_str_name;
+static zend_string *sentry_str_start_time;
+static zend_string *sentry_str_end_time;
+static zend_string *sentry_str_duration;
+static zend_string *sentry_str_metadata;
+static zend_string *sentry_str_exception;
+
 static bool sentry_array_is_list(const zend_array *array) {
 #if PHP_VERSION_ID >= 80100
     return zend_array_is_list(array);
@@ -920,12 +931,13 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
         zval data;
         array_init(&data);
 
-        add_assoc_str(&data, "name", zend_string_copy(name));
-        add_assoc_double(&data, "start_time", state->start_time);
-
-        zval metadata_zv;
-        ZVAL_COPY(&metadata_zv, &state->metadata);
-        add_assoc_zval(&data, "metadata", &metadata_zv);
+        zval tmp;
+        ZVAL_STR_COPY(&tmp, name);
+        zend_hash_add_new(Z_ARRVAL(data), sentry_str_name, &tmp);
+        ZVAL_DOUBLE(&tmp, state->start_time);
+        zend_hash_add_new(Z_ARRVAL(data), sentry_str_start_time, &tmp);
+        ZVAL_COPY(&tmp, &state->metadata);
+        zend_hash_add_new(Z_ARRVAL(data), sentry_str_metadata, &tmp);
 
         zval params[1];
         ZVAL_COPY_VALUE(&params[0], &data);
@@ -983,23 +995,25 @@ static void sentry_observer_end(zend_execute_data *execute_data, zval *return_va
 
         array_init(&event);
 
-        add_assoc_str(&event, "name", zend_string_copy(state->name));
-        add_assoc_double(&event, "start_time", state->start_time);
-        add_assoc_double(&event, "end_time", end_time);
-        add_assoc_double(&event, "duration", duration);
-
-        zval metadata_zv;
-        ZVAL_COPY(&metadata_zv, &state->metadata);
-        add_assoc_zval(&event, "metadata", &metadata_zv);
+        zval tmp;
+        ZVAL_STR_COPY(&tmp, state->name);
+        zend_hash_add_new(Z_ARRVAL(event), sentry_str_name, &tmp);
+        ZVAL_DOUBLE(&tmp, state->start_time);
+        zend_hash_add_new(Z_ARRVAL(event), sentry_str_start_time, &tmp);
+        ZVAL_DOUBLE(&tmp, end_time);
+        zend_hash_add_new(Z_ARRVAL(event), sentry_str_end_time, &tmp);
+        ZVAL_DOUBLE(&tmp, duration);
+        zend_hash_add_new(Z_ARRVAL(event), sentry_str_duration, &tmp);
+        ZVAL_COPY(&tmp, &state->metadata);
+        zend_hash_add_new(Z_ARRVAL(event), sentry_str_metadata, &tmp);
 
         zend_object *exception = EG(exception);
         if (exception != NULL) {
-            zval exception_zv;
-            ZVAL_OBJ_COPY(&exception_zv, exception);
-            add_assoc_zval(&event, "exception", &exception_zv);
+            ZVAL_OBJ_COPY(&tmp, exception);
         } else {
-            add_assoc_null(&event, "exception");
+            ZVAL_NULL(&tmp);
         }
+        zend_hash_add_new(Z_ARRVAL(event), sentry_str_exception, &tmp);
 
         ZVAL_COPY_VALUE(&params[0], &event);
 
@@ -1071,6 +1085,13 @@ PHP_MINIT_FUNCTION(sentry) {
         sizeof("sentry\\trace") - 1,
         1
     );
+
+    sentry_str_name = zend_string_init_interned("name", sizeof("name") - 1, 1);
+    sentry_str_start_time = zend_string_init_interned("start_time", sizeof("start_time") - 1, 1);
+    sentry_str_end_time = zend_string_init_interned("end_time", sizeof("end_time") - 1, 1);
+    sentry_str_duration = zend_string_init_interned("duration", sizeof("duration") - 1, 1);
+    sentry_str_metadata = zend_string_init_interned("metadata", sizeof("metadata") - 1, 1);
+    sentry_str_exception = zend_string_init_interned("exception", sizeof("exception") - 1, 1);
 
     sentry_register_log_constants(module_number);
 
