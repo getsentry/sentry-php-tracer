@@ -13,8 +13,8 @@ namespace Sentry {
     const LOG_ERROR = 400;
 
     function instrument(
-        ?string $class_name,
-        string $function_name,
+        ?string $className,
+        string $functionName,
         mixed ...$metadata
     ): bool {}
 

@@ -1,9 +1,9 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 1457ccb7fe7cf6adb3ef2cb30f0ed5fd12fef02b */
+ * Stub hash: 9b2b12d671b0ee55aa239014f8d8c702e5b5e260 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Sentry_instrument, 0, 2, _IS_BOOL, 0)
-	ZEND_ARG_TYPE_INFO(0, class_name, IS_STRING, 1)
-	ZEND_ARG_TYPE_INFO(0, function_name, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO(0, className, IS_STRING, 1)
+	ZEND_ARG_TYPE_INFO(0, functionName, IS_STRING, 0)
 	ZEND_ARG_VARIADIC_TYPE_INFO(0, metadata, IS_MIXED, 0)
 ZEND_END_ARG_INFO()
 
