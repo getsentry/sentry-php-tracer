@@ -1180,7 +1180,8 @@ static zend_observer_fcall_handlers sentry_observer(zend_execute_data *execute_d
     // with the attribute but the architecture is not build
     // around ephemeral function pointer
     if (func->common.function_name == NULL
-        || (func->common.fn_flags & ZEND_ACC_CLOSURE)) {
+        || (func->common.fn_flags & ZEND_ACC_CLOSURE)
+        || (func->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE)) {
         return handlers;
     }
 
