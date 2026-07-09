@@ -59,9 +59,47 @@ static void sentry_instrumented_function_dtor(zval *zv) {
     sentry_instrumented_function_free(Z_PTR_P(zv));
 }
 
+/**
+ * Resolved instrumentation for one zend_function. This struct is cached using
+ * the function pointer so display names and metadata are not rebuilt on every
+ * invocation.
+ */
+typedef struct {
+    // display name for the declaring scope, never NULL
+    zend_string *display_name;
+
+    // metadata array from the registration or the attribute, never UNDEF
+    zval metadata;
+
+    // callback that is invoked with function parameters before the function runs
+    // to produce metadata
+    zval preprocessing_callback;
+
+    // callback that is invoked with the return value after the function runs to
+    // produce metadata
+    zval postprocessing_callback;
+} sentry_resolved_function;
+
+static void sentry_resolved_function_free(sentry_resolved_function *resolved) {
+    zend_string_release(resolved->display_name);
+    zval_ptr_dtor(&resolved->metadata);
+
+    zval_ptr_dtor(&resolved->preprocessing_callback);
+    zval_ptr_dtor(&resolved->postprocessing_callback);
+    efree(resolved);
+}
+
+static void sentry_resolved_function_dtor(zval *zv) {
+    sentry_resolved_function_free(Z_PTR_P(zv));
+}
+
 ZEND_BEGIN_MODULE_GLOBALS(sentry)
     // Functions that should be observed. Values are sentry_instrumented_function pointers.
     HashTable instrumented_functions;
+
+    // Resolved instrumentation cache, keyed by zend_function pointer. Values are
+    // sentry_resolved_function pointers. Cleared whenever a new registration is added.
+    HashTable resolved_functions;
 
     // Call state of currently executing functions
     HashTable active_calls;
@@ -530,9 +568,11 @@ ZEND_FUNCTION(Sentry_instrument) {
         Z_PARAM_VARIADIC_WITH_NAMED(metadata_args, metadata_argc, named_metadata)
     ZEND_PARSE_PARAMETERS_END();
 
-    if (SENTRY_G(shutting_down)) {
+    if (SENTRY_G(shutting_down) || SENTRY_G(in_callback)) {
         RETURN_FALSE;
     }
+
+    zend_function *target_func = NULL;
 
     // If a subclass doesn't override a method from the parent, the scope will
     // remain of the parent. For example, if A defined method food and B extends A
@@ -545,8 +585,11 @@ ZEND_FUNCTION(Sentry_instrument) {
         if (ce != NULL) {
             zend_string *lc_func = zend_string_tolower(function_name);
             zend_function *func = zend_hash_find_ptr(&ce->function_table, lc_func);
-            if (func != NULL && func->common.scope != NULL) {
-                class_name = func->common.scope->name;
+            if (func != NULL) {
+                target_func = func;
+                if (func->common.scope != NULL) {
+                    class_name = func->common.scope->name;
+                }
             }
             zend_string_release(lc_func);
         }
@@ -617,6 +660,10 @@ ZEND_FUNCTION(Sentry_instrument) {
 
     zend_string *key = sentry_build_key(class_name, function_name);
 
+    if (class_name == NULL) {
+        target_func = zend_hash_find_ptr(EG(function_table), key);
+    }
+
     sentry_instrumented_function *config = emalloc(sizeof(sentry_instrumented_function));
     config->metadata = metadata;
     config->preprocessing_callback = preprocessing_callback;
@@ -638,6 +685,11 @@ ZEND_FUNCTION(Sentry_instrument) {
         zend_string_release(display_name);
 
         sentry_instrumented_function_free(config);
+    } else if (target_func != NULL) {
+        zend_hash_index_del(
+            &SENTRY_G(resolved_functions),
+            (zend_ulong) (uintptr_t) target_func
+        );
     }
 
     zend_string_release(key);
@@ -787,16 +839,49 @@ static sentry_instrumented_function *sentry_find_registration(const zend_functio
     return config_zv == NULL ? NULL : Z_PTR_P(config_zv);
 }
 
-static bool sentry_should_observe(zend_execute_data *execute_data) {
-    if (execute_data->func->common.function_name == NULL) {
-        return false;
+static sentry_resolved_function *sentry_resolve_function(zend_execute_data *execute_data) {
+    const zend_function *func = execute_data->func;
+
+    if (func->common.function_name == NULL) {
+        return NULL;
     }
 
-    if (sentry_find_registration(execute_data->func) != NULL) {
-        return true;
+    sentry_instrumented_function *config = sentry_find_registration(func);
+
+    zval metadata;
+    if (config != NULL) {
+        ZVAL_COPY(&metadata, &config->metadata);
+    } else {
+        if (!sentry_has_trace_attribute(execute_data)) {
+            return NULL;
+        }
+        sentry_get_attribute_metadata(execute_data, &metadata);
     }
 
-    return sentry_has_trace_attribute(execute_data);
+    sentry_resolved_function *resolved = emalloc(sizeof(sentry_resolved_function));
+    resolved->display_name = sentry_build_display_name(
+        func->common.scope == NULL ? NULL : func->common.scope->name,
+        func->common.function_name
+    );
+    resolved->metadata = metadata;
+    if (config != NULL) {
+        ZVAL_COPY(&resolved->preprocessing_callback, &config->preprocessing_callback);
+        ZVAL_COPY(&resolved->postprocessing_callback, &config->postprocessing_callback);
+    } else {
+        ZVAL_UNDEF(&resolved->preprocessing_callback);
+        ZVAL_UNDEF(&resolved->postprocessing_callback);
+    }
+
+    zval resolved_zv;
+    ZVAL_PTR(&resolved_zv, resolved);
+
+    zend_hash_index_update(
+        &SENTRY_G(resolved_functions),
+        (zend_ulong) (uintptr_t) func,
+        &resolved_zv
+    );
+
+    return resolved;
 }
 
 static zval *sentry_get_call_argument(zend_execute_data *execute_data, uint32_t index) {
@@ -924,43 +1009,53 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
         return;
     }
 
-    zend_class_entry *caller_class = zend_get_called_scope(execute_data);
-
-    zend_string *name = sentry_build_display_name(
-        caller_class == NULL ? NULL : caller_class->name,
-        execute_data->func->common.function_name
+    const zend_function *func = execute_data->func;
+    zval *resolved_zv = zend_hash_index_find(
+        &SENTRY_G(resolved_functions),
+        (zend_ulong) (uintptr_t) func
     );
+    sentry_resolved_function *resolved = resolved_zv == NULL ? NULL : Z_PTR_P(resolved_zv);
 
-    sentry_instrumented_function *config = sentry_find_registration(execute_data->func);
-    zval *metadata = config == NULL ? NULL : &config->metadata;
+    if (resolved == NULL) {
+        resolved = sentry_resolve_function(execute_data);
+        if (resolved == NULL) {
+            return;
+        }
+    }
 
-    zval attribute_metadata;
-    bool using_attribute_metadata = false;
+    // the display name has to be rebuilt here because a subclass can call
+    // an instrumented parent function, in which case both point to the same
+    // function and it would produce the name of the parent
+    zend_string *name;
+    zend_class_entry *called_scope = zend_get_called_scope(execute_data);
+    if (called_scope == func->common.scope) {
+        name = zend_string_copy(resolved->display_name);
+    } else {
+        name = sentry_build_display_name(
+            called_scope == NULL ? NULL : called_scope->name,
+            func->common.function_name
+        );
+    }
 
-    if (metadata == NULL) {
-        sentry_get_attribute_metadata(execute_data, &attribute_metadata);
-        metadata = &attribute_metadata;
-        using_attribute_metadata = true;
+    sentry_call_state *state = sentry_new_call_state(name);
+    ZVAL_COPY(&state->metadata, &resolved->metadata);
+    ZVAL_COPY(&state->postprocessing_callback, &resolved->postprocessing_callback);
+
+    zval preprocessing_callback;
+    ZVAL_COPY(&preprocessing_callback, &resolved->preprocessing_callback);
+    resolved = NULL;
+
+    if (!Z_ISUNDEF(preprocessing_callback)) {
+        sentry_run_preprocessing_callback(
+            execute_data,
+            &preprocessing_callback,
+            &state->metadata
+        );
+        zval_ptr_dtor(&preprocessing_callback);
     }
 
     zval retval;
     ZVAL_UNDEF(&retval);
-
-    sentry_call_state *state = sentry_new_call_state(name);
-    ZVAL_COPY(&state->metadata, metadata);
-
-    if (config != NULL) {
-        if (!Z_ISUNDEF(config->postprocessing_callback)) {
-            ZVAL_COPY(&state->postprocessing_callback, &config->postprocessing_callback);
-        }
-        if (!Z_ISUNDEF(config->preprocessing_callback)) {
-            sentry_run_preprocessing_callback(
-                execute_data,
-                &config->preprocessing_callback,
-                &state->metadata
-            );
-        }
-    }
 
     if (!Z_ISUNDEF(SENTRY_G(start_callback))) {
         zval data;
@@ -997,10 +1092,6 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
     ZVAL_PTR(&state_zv, state);
 
     zend_hash_index_update(&SENTRY_G(active_calls), (zend_ulong) (uintptr_t) execute_data, &state_zv);
-
-    if (using_attribute_metadata) {
-        zval_ptr_dtor(&attribute_metadata);
-    }
 }
 
 static void sentry_observer_end(zend_execute_data *execute_data, zval *return_value) {
@@ -1083,7 +1174,18 @@ static zend_observer_fcall_handlers sentry_observer(zend_execute_data *execute_d
         return handlers;
     }
 
-    if (sentry_should_observe(execute_data)) {
+    const zend_function *func = execute_data->func;
+
+    // prevent closures from being instrumented. technically possible
+    // with the attribute but the architecture is not build
+    // around ephemeral function pointer
+    if (func->common.function_name == NULL
+        || (func->common.fn_flags & ZEND_ACC_CLOSURE)
+        || (func->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE)) {
+        return handlers;
+    }
+
+    if (sentry_resolve_function(execute_data) != NULL) {
         handlers.begin = sentry_observer_begin;
         handlers.end = sentry_observer_end;
     }
@@ -1155,6 +1257,7 @@ PHP_RINIT_FUNCTION(sentry) {
     SENTRY_G(in_log_callback) = false;
     SENTRY_G(shutting_down) = false;
     zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, sentry_instrumented_function_dtor, 0);
+    zend_hash_init(&SENTRY_G(resolved_functions), 8, NULL, sentry_resolved_function_dtor, 0);
     zend_hash_init(&SENTRY_G(active_calls), 8, NULL, sentry_call_state_dtor, 0);
 
     ZVAL_UNDEF(&SENTRY_G(start_callback));
@@ -1167,23 +1270,18 @@ PHP_RINIT_FUNCTION(sentry) {
 PHP_RSHUTDOWN_FUNCTION(sentry) {
     SENTRY_G(shutting_down) = true;
 
+    zend_hash_destroy(&SENTRY_G(resolved_functions));
     zend_hash_destroy(&SENTRY_G(instrumented_functions));
     zend_hash_destroy(&SENTRY_G(active_calls));
 
-    if (!Z_ISUNDEF(SENTRY_G(start_callback))) {
-        zval_ptr_dtor(&SENTRY_G(start_callback));
-        ZVAL_UNDEF(&SENTRY_G(start_callback));
-    }
+    zval_ptr_dtor(&SENTRY_G(start_callback));
+    ZVAL_UNDEF(&SENTRY_G(start_callback));
 
-    if (!Z_ISUNDEF(SENTRY_G(end_callback))) {
-        zval_ptr_dtor(&SENTRY_G(end_callback));
-        ZVAL_UNDEF(&SENTRY_G(end_callback));
-    }
+    zval_ptr_dtor(&SENTRY_G(end_callback));
+    ZVAL_UNDEF(&SENTRY_G(end_callback));
 
-    if (!Z_ISUNDEF(SENTRY_G(log_callback))) {
-        zval_ptr_dtor(&SENTRY_G(log_callback));
-        ZVAL_UNDEF(&SENTRY_G(log_callback));
-    }
+    zval_ptr_dtor(&SENTRY_G(log_callback));
+    ZVAL_UNDEF(&SENTRY_G(log_callback));
 
     return SUCCESS;
 }
