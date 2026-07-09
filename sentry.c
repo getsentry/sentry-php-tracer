@@ -83,6 +83,9 @@ ZEND_BEGIN_MODULE_GLOBALS(sentry)
     // True when currently in a log callback. Used as reentry guard so that the log callback
     // cannot produce more logs and cause infinite invocations.
     bool in_log_callback;
+
+    // True when the RSHUTDOWN ran and prevents access to potentially freed HashTables during shutdown
+    bool shutting_down;
 ZEND_END_MODULE_GLOBALS(sentry)
 
 ZEND_DECLARE_MODULE_GLOBALS(sentry)
@@ -527,6 +530,10 @@ ZEND_FUNCTION(Sentry_instrument) {
         Z_PARAM_VARIADIC_WITH_NAMED(metadata_args, metadata_argc, named_metadata)
     ZEND_PARSE_PARAMETERS_END();
 
+    if (SENTRY_G(shutting_down)) {
+        RETURN_FALSE;
+    }
+
     // If a subclass doesn't override a method from the parent, the scope will
     // remain of the parent. For example, if A defined method food and B extends A
     // without overriding, doing (new B())->foo() will show up as A::foo in the
@@ -650,6 +657,10 @@ ZEND_FUNCTION(Sentry_setEndCallback) {
         RETURN_THROWS();
     }
 
+    if (SENTRY_G(shutting_down)) {
+        RETURN_FALSE;
+    }
+
     if (!Z_ISUNDEF(SENTRY_G(end_callback))) {
         zval_ptr_dtor(&SENTRY_G(end_callback));
     }
@@ -671,6 +682,10 @@ ZEND_FUNCTION(Sentry_setStartCallback) {
         RETURN_THROWS();
     }
 
+    if (SENTRY_G(shutting_down)) {
+        RETURN_FALSE;
+    }
+
     if (!Z_ISUNDEF(SENTRY_G(start_callback))) {
         zval_ptr_dtor(&SENTRY_G(start_callback));
     }
@@ -690,6 +705,10 @@ ZEND_FUNCTION(Sentry_setLogCallback) {
     if (!zend_is_callable(callback, 0, NULL)) {
         zend_argument_type_error(1, "must be a valid callback");
         RETURN_THROWS();
+    }
+
+    if (SENTRY_G(shutting_down)) {
+        RETURN_FALSE;
     }
 
     if (!Z_ISUNDEF(SENTRY_G(log_callback))) {
@@ -901,7 +920,7 @@ static void sentry_run_postprocessing_callback(
 }
 
 static void sentry_observer_begin(zend_execute_data *execute_data) {
-    if (SENTRY_G(in_callback)) {
+    if (SENTRY_G(in_callback) || SENTRY_G(shutting_down)) {
         return;
     }
 
@@ -985,6 +1004,10 @@ static void sentry_observer_begin(zend_execute_data *execute_data) {
 }
 
 static void sentry_observer_end(zend_execute_data *execute_data, zval *return_value) {
+    if (SENTRY_G(shutting_down)) {
+        return;
+    }
+
     zend_ulong hash_key = (zend_ulong) (uintptr_t) execute_data;
 
     zval *state_zv = zend_hash_index_find(&SENTRY_G(active_calls), hash_key);
@@ -1056,6 +1079,10 @@ static void sentry_observer_end(zend_execute_data *execute_data, zval *return_va
 static zend_observer_fcall_handlers sentry_observer(zend_execute_data *execute_data) {
     zend_observer_fcall_handlers handlers = {0};
 
+    if (SENTRY_G(shutting_down)) {
+        return handlers;
+    }
+
     if (sentry_should_observe(execute_data)) {
         handlers.begin = sentry_observer_begin;
         handlers.end = sentry_observer_end;
@@ -1126,6 +1153,7 @@ static PHP_GINIT_FUNCTION(sentry) {
 PHP_RINIT_FUNCTION(sentry) {
     SENTRY_G(in_callback) = false;
     SENTRY_G(in_log_callback) = false;
+    SENTRY_G(shutting_down) = false;
     zend_hash_init(&SENTRY_G(instrumented_functions), 8, NULL, sentry_instrumented_function_dtor, 0);
     zend_hash_init(&SENTRY_G(active_calls), 8, NULL, sentry_call_state_dtor, 0);
 
@@ -1137,6 +1165,8 @@ PHP_RINIT_FUNCTION(sentry) {
 }
 
 PHP_RSHUTDOWN_FUNCTION(sentry) {
+    SENTRY_G(shutting_down) = true;
+
     zend_hash_destroy(&SENTRY_G(instrumented_functions));
     zend_hash_destroy(&SENTRY_G(active_calls));
 
