@@ -18,7 +18,7 @@ class Foo {
     echo "Second callback" . PHP_EOL;
 });
 
-\Sentry\instrument("Foo", 'work', []);
+\Sentry\instrument('work', class: "Foo", attributes: []);
 (new Foo())->work();
 
 ?>

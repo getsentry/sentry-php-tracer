@@ -22,7 +22,7 @@ class B extends A {
 
 (new B())->work();
 
-\Sentry\instrument("B", "work", ['source' => 'registration']);
+\Sentry\instrument("work", class: "B", attributes: ['source' => 'registration']);
 
 (new B())->work();
 (new A())->work();

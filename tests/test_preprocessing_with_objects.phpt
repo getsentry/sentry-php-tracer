@@ -38,7 +38,7 @@ function test_instrumented(A $a) {
     }
 }); 
 
-\Sentry\instrument(null, 'test_instrumented', preprocessing: static function (A $param) {
+\Sentry\instrument('test_instrumented', preprocessing: static function (A $param) {
     return [
         'param' => $param->getX(),
     ];

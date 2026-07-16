@@ -12,9 +12,17 @@ namespace Sentry {
     const LOG_WARNING = 300;
     const LOG_ERROR = 400;
 
+    /**
+     * @phpstan-param callable(mixed...): mixed $preprocessing
+     * @phpstan-param callable(mixed): mixed $postprocessing
+     * @phpstan-param array<string, mixed> $attributes
+     */
     function instrument(
-        ?string $className,
-        string $functionName,
+        string $function,
+        ?string $class = null,
+        ?callable $preprocessing = null,
+        ?callable $postprocessing = null,
+        array $attributes = [],
         mixed ...$metadata
     ): bool {}
 

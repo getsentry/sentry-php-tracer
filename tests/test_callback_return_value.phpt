@@ -24,7 +24,7 @@ function test_instrumented() {
     echo $returnValue . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_instrumented');
+\Sentry\instrument('test_instrumented');
 test_instrumented();
 
 ?>

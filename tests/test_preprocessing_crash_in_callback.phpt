@@ -17,7 +17,7 @@ function test_instrumented(string $foo, int $bar) {
     echo "end callback" . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_instrumented', preprocessing: static function (string $foo, int $bar) {
+\Sentry\instrument('test_instrumented', preprocessing: static function (string $foo, int $bar) {
     throw new \RuntimeException("Oh no");
 });
 

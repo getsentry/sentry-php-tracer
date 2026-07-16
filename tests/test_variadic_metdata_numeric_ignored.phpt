@@ -20,7 +20,7 @@ function test_instrumented() {
     }
 });
 
-\Sentry\instrument(null, "test_instrumented", attributes: [0 => 'test', 1 => 'abc', 'test' => 'example']);
+\Sentry\instrument("test_instrumented", attributes: [0 => 'test', 1 => 'abc', 'test' => 'example']);
 test_instrumented();
 
 ?>

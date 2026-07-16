@@ -16,7 +16,7 @@ class Foo {
     echo "Duration: " . $data['duration'] . PHP_EOL;
 }); 
 
-\Sentry\instrument("Foo", 'work', []);
+\Sentry\instrument('work', class: "Foo", attributes: []);
 (new Foo())->work();
 
 ?>

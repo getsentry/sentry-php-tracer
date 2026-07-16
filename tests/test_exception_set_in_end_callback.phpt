@@ -19,7 +19,7 @@ function test_throw() {
     echo get_class($exception) . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_throw');
+\Sentry\instrument('test_throw');
 try {
 test_throw();
 } catch (Throwable $t) {

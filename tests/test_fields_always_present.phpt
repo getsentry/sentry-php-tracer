@@ -24,7 +24,7 @@ function test_instrumented() {
     echo 'metadata: ' . get_debug_type($data['metadata']) . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_instrumented');
+\Sentry\instrument('test_instrumented');
 test_instrumented();
 
 ?>

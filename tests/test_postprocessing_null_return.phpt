@@ -13,7 +13,7 @@ function test_instrumented(string $foo, int $bar): ?string {
     echo "Return: " . $data['metadata']['return'] . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_instrumented', postprocessing: static function ($return) {
+\Sentry\instrument('test_instrumented', postprocessing: static function ($return) {
     return [
         'return' => \gettype($return),
     ];

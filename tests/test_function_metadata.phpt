@@ -25,7 +25,7 @@ function test_instrumented() {
     echo "End metadata: " . ($data['metadata']['sentry.op'] ?? 'invalid') . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_instrumented', ['sentry.op' => 'test']);
+\Sentry\instrument('test_instrumented', attributes: ['sentry.op' => 'test']);
 test_instrumented();
 
 ?>

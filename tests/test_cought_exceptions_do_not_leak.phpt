@@ -29,8 +29,8 @@ function test_rethrow() {
     }
 }); 
 
-\Sentry\instrument(null, 'test_throw');
-\Sentry\instrument(null, 'test_rethrow');
+\Sentry\instrument('test_throw');
+\Sentry\instrument('test_rethrow');
 try {
 test_rethrow();
 } catch (Throwable $t) {

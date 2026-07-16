@@ -14,7 +14,7 @@ function test_instrumented(string $foo, int $bar): string {
     echo "Bar: " . ($data['metadata']['bar'] ?? 'No Bar'). PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_instrumented', postprocessing: static function (int $foo, float $bar) {
+\Sentry\instrument('test_instrumented', postprocessing: static function (int $foo, float $bar) {
     return [
         'return' => \gettype($return),
     ];

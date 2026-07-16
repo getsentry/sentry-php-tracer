@@ -150,6 +150,7 @@ static zend_string *sentry_str_end_time;
 static zend_string *sentry_str_duration;
 static zend_string *sentry_str_metadata;
 static zend_string *sentry_str_exception;
+static zend_string *sentry_str_attributes;
 
 static bool sentry_array_is_list(const zend_array *array) {
 #if PHP_VERSION_ID >= 80100
@@ -247,7 +248,7 @@ static void sentry_clear_pending_exception(void) {
 
 static bool sentry_is_attribute_arg(zend_string *name, zval *value) {
     return name != NULL
-        && zend_string_equals_literal(name, "attributes")
+        && zend_string_equals(name, sentry_str_attributes)
         && Z_TYPE_P(value) == IS_ARRAY;
 }
 
@@ -554,17 +555,51 @@ static zend_string *sentry_build_key(zend_string *class_name, zend_string *funct
     return sentry_join_class_function(class_name, function_name, /* lowercase */ true);
 }
 
+static void sentry_set_processing_callback(
+    zval *target,
+    zval *argument,
+    const char *argument_name,
+    zend_string *class_name,
+    zend_string *function_name
+) {
+    if (argument == NULL || Z_TYPE_P(argument) == IS_NULL) {
+        return;
+    }
+
+    if (!zend_is_callable(argument, 0, NULL)) {
+        zend_string *display_name = sentry_build_display_name(class_name, function_name);
+        sentry_emit_logf(
+            SENTRY_LOG_WARNING,
+            "Sentry instrumentation argument \"%s\" for '%s' is not a valid callback and was ignored.",
+            argument_name,
+            ZSTR_VAL(display_name)
+        );
+        zend_string_release(display_name);
+        return;
+    }
+
+    ZVAL_COPY(target, argument);
+}
+
 ZEND_FUNCTION(Sentry_instrument) {
     zend_string *class_name = NULL;
     zend_string *function_name;
+
+    zval *preprocessing_arg = NULL;
+    zval *postprocessing_arg = NULL;
+    zval *attributes_arg = NULL;
 
     zval *metadata_args = NULL;
     uint32_t metadata_argc = 0;
     HashTable *named_metadata = NULL;
 
-    ZEND_PARSE_PARAMETERS_START(2,-1)
-        Z_PARAM_STR_OR_NULL(class_name)
+    ZEND_PARSE_PARAMETERS_START(1,-1)
         Z_PARAM_STR(function_name)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_STR_OR_NULL(class_name)
+        Z_PARAM_ZVAL(preprocessing_arg)
+        Z_PARAM_ZVAL(postprocessing_arg)
+        Z_PARAM_ZVAL(attributes_arg)
         Z_PARAM_VARIADIC_WITH_NAMED(metadata_args, metadata_argc, named_metadata)
     ZEND_PARSE_PARAMETERS_END();
 
@@ -607,6 +642,30 @@ ZEND_FUNCTION(Sentry_instrument) {
     zval attribute_list;
     ZVAL_UNDEF(&attribute_list);
 
+    sentry_set_processing_callback(
+        &preprocessing_callback,
+        preprocessing_arg,
+        SENTRY_PREPROCESSING_ARG,
+        class_name,
+        function_name
+    );
+    sentry_set_processing_callback(
+        &postprocessing_callback,
+        postprocessing_arg,
+        SENTRY_POSTPROCESSING_ARG,
+        class_name,
+        function_name
+    );
+
+    if (attributes_arg != NULL) {
+        sentry_add_named_metadata_arg(
+            &metadata,
+            &attribute_list,
+            sentry_str_attributes,
+            attributes_arg
+        );
+    }
+
     for (uint32_t i = 0; i < metadata_argc; i++) {
         if (Z_TYPE(metadata_args[i]) == IS_ARRAY) {
             sentry_merge_array(&metadata, &metadata_args[i]);
@@ -618,32 +677,6 @@ ZEND_FUNCTION(Sentry_instrument) {
         zval *value;
 
         ZEND_HASH_FOREACH_STR_KEY_VAL(named_metadata, name, value) {
-            zval *callback_target = NULL;
-
-            if (name != NULL) {
-                if (zend_string_equals_literal(name, SENTRY_PREPROCESSING_ARG)) {
-                    callback_target = &preprocessing_callback;
-                } else if (zend_string_equals_literal(name, SENTRY_POSTPROCESSING_ARG)) {
-                    callback_target = &postprocessing_callback;
-                }
-            }
-
-            if (callback_target != NULL) {
-                if (!zend_is_callable(value, 0, NULL)) {
-                    zend_string *display_name = sentry_build_display_name(class_name, function_name);
-                    sentry_emit_logf(
-                        SENTRY_LOG_WARNING,
-                        "Sentry instrumentation argument \"%s\" for '%s' is not a valid callback and was ignored.",
-                        ZSTR_VAL(name),
-                        ZSTR_VAL(display_name)
-                    );
-                    zend_string_release(display_name);
-                    continue;
-                }
-                ZVAL_COPY(callback_target, value);
-                continue;
-            }
-
             if (name != NULL) {
                 sentry_add_named_metadata_arg(
                     &metadata,
@@ -1237,6 +1270,7 @@ PHP_MINIT_FUNCTION(sentry) {
     sentry_str_duration = zend_string_init_interned("duration", sizeof("duration") - 1, 1);
     sentry_str_metadata = zend_string_init_interned("metadata", sizeof("metadata") - 1, 1);
     sentry_str_exception = zend_string_init_interned("exception", sizeof("exception") - 1, 1);
+    sentry_str_attributes = zend_string_init_interned("attributes",sizeof("attributes") - 1,1);
 
     sentry_register_log_constants(module_number);
 

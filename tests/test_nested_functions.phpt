@@ -25,9 +25,9 @@ function work3() {
     echo "End name: " . $data['name'] . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'work1');
-\Sentry\instrument(null, 'work2');
-\Sentry\instrument(null, 'work3');
+\Sentry\instrument('work1');
+\Sentry\instrument('work2');
+\Sentry\instrument('work3');
 
 work1();
 

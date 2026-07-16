@@ -14,9 +14,9 @@ function work() {
     echo "Duration: " . $data['duration'] . PHP_EOL;
 }); 
 
-$result = \Sentry\instrument(null, 'work');
+$result = \Sentry\instrument('work');
 echo "First result: " . ($result ? "true" : "false") . PHP_EOL;
-$result = \Sentry\instrument(null, 'work');
+$result = \Sentry\instrument('work');
 echo "Second result: " . ($result ? "true" : "false") . PHP_EOL;
 work();
 
