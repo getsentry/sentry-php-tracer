@@ -22,7 +22,7 @@ function test_instrumented() {
     echo "Custom: " . $data['metadata']['custom'] . PHP_EOL;
 });
 
-\Sentry\instrument(null, "test_instrumented", op: "foo", description: "bar", custom: "oh no", attributes: ["custom" => "abc", "test" => "example"]);
+\Sentry\instrument("test_instrumented", op: "foo", description: "bar", custom: "oh no", attributes: ["custom" => "abc", "test" => "example"]);
 test_instrumented();
 
 ?>

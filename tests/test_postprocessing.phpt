@@ -21,7 +21,7 @@ function test_instrumented(string $foo, int $bar) {
     echo "Return: " . $data['metadata']['return'] . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'test_instrumented', postprocessing: static function (string $return) {
+\Sentry\instrument('test_instrumented', postprocessing: static function (string $return) {
     return [
         'return' => $return,
     ];

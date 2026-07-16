@@ -9,7 +9,7 @@ function work() {
     return 10;
 }
 
-$result = \Sentry\instrument(null, 'work');
+$result = \Sentry\instrument('work');
 work();
 
 ?>

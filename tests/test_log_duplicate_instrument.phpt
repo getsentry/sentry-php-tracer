@@ -18,8 +18,8 @@ function test_instrumented() {
     echo $level . ":" . $message . PHP_EOL;
 });
 
-var_dump(\Sentry\instrument(null, 'test_instrumented', []));
-var_dump(\Sentry\instrument(null, 'test_instrumented', []));
+var_dump(\Sentry\instrument('test_instrumented', attributes: []));
+var_dump(\Sentry\instrument('test_instrumented', attributes: []));
 
 ?>
 --EXPECTF--

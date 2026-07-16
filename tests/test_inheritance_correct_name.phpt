@@ -20,7 +20,7 @@ class B extends A {
     echo "Duration: " . $data['duration'] . PHP_EOL;
 }); 
 
-\Sentry\instrument("B", "work");
+\Sentry\instrument("work", class: "B");
 
 (new B())->work();
 (new A())->work();

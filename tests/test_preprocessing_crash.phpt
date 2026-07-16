@@ -17,7 +17,7 @@ function test_instrumented(string $foo, int $bar) {
     }
 }); 
 
-\Sentry\instrument(null, 'test_instrumented', postprocessing: static function () {
+\Sentry\instrument('test_instrumented', postprocessing: static function () {
     return ['return' => 'return'];
 });
 

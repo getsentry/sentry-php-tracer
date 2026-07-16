@@ -16,7 +16,7 @@ function work() {
 
 work();
 
-\Sentry\instrument(null, 'work', ['source' => 'registration']);
+\Sentry\instrument('work', attributes: ['source' => 'registration']);
 
 work();
 

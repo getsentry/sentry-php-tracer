@@ -17,7 +17,7 @@ function test_instrumented() {
     echo $level . ":" . $message . PHP_EOL;
 });
 
-\Sentry\instrument(null, 'test_instrumented', []);
+\Sentry\instrument('test_instrumented', attributes: []);
 test_instrumented();
 
 ?>

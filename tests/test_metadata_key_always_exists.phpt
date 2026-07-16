@@ -19,7 +19,7 @@ function test_instrumented() {
     }
 }); 
 
-\Sentry\instrument(null, 'test_instrumented');
+\Sentry\instrument('test_instrumented');
 test_instrumented();
 
 ?>

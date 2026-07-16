@@ -14,7 +14,7 @@ function work() {
     echo "Duration: " . $data['duration'] . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'working');
+\Sentry\instrument('working');
 work();
 
 ?>

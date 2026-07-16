@@ -15,7 +15,7 @@ function work() {
     echo "Metadata: " . ($data['metadata']['sentry.op'] ?? 'invalid') . PHP_EOL;
 }); 
 
-\Sentry\instrument(null, 'work', ['sentry.op' => 'test']);
+\Sentry\instrument('work', attributes: ['sentry.op' => 'test']);
 try {
     work();
 } catch (Throwable $t) {

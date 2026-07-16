@@ -17,7 +17,7 @@ function work() {
     throw new \RuntimeException("callback boom");
 }); 
 
-\Sentry\instrument(null, 'work');
+\Sentry\instrument('work');
 try {
     work();
 } catch (Throwable $throwable) {

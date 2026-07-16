@@ -13,7 +13,7 @@ function work() {
     throw new \RuntimeException("Does not break out");
 }); 
 
-\Sentry\instrument(null, 'work', ['sentry.op' => 'test']);
+\Sentry\instrument('work', attributes: ['sentry.op' => 'test']);
 work();
 
 ?>

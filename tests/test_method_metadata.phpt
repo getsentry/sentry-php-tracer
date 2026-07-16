@@ -22,7 +22,7 @@ class Foo {
     echo "End metadata: " . ($data['metadata']['sentry.op'] ?? 'invalid') . PHP_EOL;
 }); 
 
-\Sentry\instrument("Foo", 'work', ['sentry.op' => 'test']);
+\Sentry\instrument('work', class: "Foo", attributes: ['sentry.op' => 'test']);
 (new Foo())->work();
 
 ?>

@@ -18,7 +18,7 @@ function test_instrumented() {
     throw new \RuntimeException("log callback crashed");
 });
 
-\Sentry\instrument(null, 'test_instrumented', []);
+\Sentry\instrument('test_instrumented', attributes: []);
 test_instrumented();
 
 ?>

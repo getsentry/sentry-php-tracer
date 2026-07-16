@@ -17,7 +17,7 @@ function work() {
     work();
 }); 
 
-\Sentry\instrument(null, 'work', ['sentry.op' => 'test']);
+\Sentry\instrument('work', attributes: ['sentry.op' => 'test']);
 work();
 
 ?>
