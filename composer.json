@@ -1,0 +1,14 @@
+{
+    "name": "sentry/sentry-php-tracer",
+    "type": "php-ext",
+    "description": "Experimental Sentry tracing extension for PHP",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.0 <8.6"
+    },
+    "php-ext": {
+        "extension-name": "sentry",
+        "support-zts": true,
+        "support-nts": true
+    }
+}
