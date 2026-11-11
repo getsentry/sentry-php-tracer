@@ -20,7 +20,7 @@
 #endif
 #include "sentry_log.h"
 
-#define PHP_SENTRY_VERSION "0.1.0"
+#define PHP_SENTRY_VERSION "0.1.1"
 
 #define SENTRY_PREPROCESSING_ARG "preprocessing"
 #define SENTRY_POSTPROCESSING_ARG "postprocessing"
