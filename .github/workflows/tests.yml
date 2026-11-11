@@ -65,6 +65,7 @@ jobs:
 
       - uses: php/php-windows-builder/extension@v1
         with:
+          extension-ref: ${{ github.sha }}
           php-version: ${{ matrix.php-version }}
           arch: ${{ matrix.arch }}
           ts: ${{ matrix.ts }}
