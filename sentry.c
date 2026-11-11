@@ -20,6 +20,8 @@
 #endif
 #include "sentry_log.h"
 
+#define PHP_SENTRY_VERSION "0.1.0"
+
 #define SENTRY_PREPROCESSING_ARG "preprocessing"
 #define SENTRY_POSTPROCESSING_ARG "postprocessing"
 
@@ -1333,7 +1335,7 @@ zend_module_entry sentry_module_entry = {
     PHP_RINIT(sentry),
     PHP_RSHUTDOWN(sentry),
     NULL,
-    "0.1.0",
+    PHP_SENTRY_VERSION,
     PHP_MODULE_GLOBALS(sentry),
     PHP_GINIT(sentry),
     NULL,

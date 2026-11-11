@@ -1,0 +1,18 @@
+minVersion: '3.8.0'
+github:
+  owner: getsentry
+  repo: sentry-php-tracer
+changelog:
+  policy: auto
+versioning:
+  policy: manual
+  files:
+    - path: sentry.c
+      format: regex
+      pattern: '/#define PHP_SENTRY_VERSION "([^"]+)"/'
+statusProvider:
+  name: github
+artifactProvider:
+  name: none
+targets:
+  - name: github
