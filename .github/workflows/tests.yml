@@ -25,7 +25,7 @@ jobs:
       - name: Build
         run: |
           phpize
-          ./configure --enable-sentry
+          ./configure
           make
 
       - name: Test
@@ -47,7 +47,7 @@ jobs:
       - name: Build
         run: |
           phpize
-          ./configure --enable-sentry
+          ./configure
           make
 
       - name: Test under valgrind

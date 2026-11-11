@@ -1,6 +1,2 @@
-PHP_ARG_ENABLE(sentry, whether to enable Sentry support,
-    [ --disable-sentry   Disable Sentry support], yes)
-if test "$PHP_SENTRY" = "yes"; then
-    AC_DEFINE(HAVE_SENTRY, 1, [Whether you have Sentry])
-    PHP_NEW_EXTENSION(sentry, sentry.c sentry_log.c, $ext_shared)
-fi
+AC_DEFINE(HAVE_SENTRY, 1, [Whether you have Sentry])
+PHP_NEW_EXTENSION(sentry, sentry.c sentry_log.c, shared)
